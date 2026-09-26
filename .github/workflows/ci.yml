@@ -28,11 +28,15 @@ jobs:
         with:
           persist-credentials: false
       # `lake build` (the library and protoc-gen-connect-lean), then `lake test`
-      # (the tests, and the code in README.md). On Linux, also checks that
-      # nothing in `Connect` rests on axioms beyond the standard three.
+      # (the tests, the code in README.md, and the axioms of the theorems it
+      # lists). On Linux, also checks that nothing in `Connect` rests on other
+      # axioms: `lcProof` comes from `unsafeCast` in the two `unsafe`
+      # definitions that implement `MessageInterceptor.box`, which proofs
+      # cannot reach.
       - uses: leanprover/lean-action@50fcf42d2e460296f1a34b402e990d1b24f8b596 # v1.6.0
         with:
           axiom-audit: ${{ matrix.os == 'ubuntu-24.04' }}
+          axiom-audit-allow: propext,Classical.choice,Quot.sound,lcProof
       - name: Build the examples and the benchmark
         run: lake build eliza-server eliza-client bench
 

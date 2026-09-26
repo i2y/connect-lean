@@ -6,6 +6,7 @@ import Tests.Http2
 import Tests.Edge
 import Tests.Robustness
 import Tests.Interceptors
+import Tests.Axioms
 
 /-- `tests [filter]`: runs the tests whose names contain `filter`. -/
 def main (args : List String) : IO UInt32 :=
