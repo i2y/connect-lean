@@ -1,0 +1,7 @@
+* text=auto eol=lf
+
+# Generated code, collapsed in diffs by default.
+conformance/ConformanceGen/** linguist-generated=true
+examples/eliza/ElizaGen/** linguist-generated=true
+tests/EdgeGen/** linguist-generated=true
+Connect/Http2/HpackTables.lean linguist-generated=true
