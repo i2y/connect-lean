@@ -1,5 +1,8 @@
 # connect-lean
 
+[![CI](https://github.com/i2y/connect-lean/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/i2y/connect-lean/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 [Connect](https://connectrpc.com) for Lean 4: serve and call APIs defined in
 Protocol Buffers, over the Connect protocol, gRPC and gRPC-Web, with binary or
 JSON messages.
@@ -22,7 +25,8 @@ $ curl -X POST localhost:8080/greet.v1.GreetService/Greet \
 > [Connect conformance suite](https://github.com/connectrpc/conformance) for
 > everything it claims: all 1,980 server cases and all 2,647 client cases, for
 > the Connect, gRPC and gRPC-Web protocols over HTTP/1.1 and HTTP/2 without TLS
-> (see [Limitations](#limitations)).
+> (see [Limitations](#limitations)). The API may still change between 0.x
+> releases.
 
 ## Features
 
@@ -50,14 +54,15 @@ $ curl -X POST localhost:8080/greet.v1.GreetService/Greet \
 
 ## Installation
 
-In your `lakefile.lean`, point at a checkout (the package is not published yet):
+In your `lakefile.lean`:
 
 ```lean
-require connectrpc from "../connect-lean"
+require connectrpc from git "https://github.com/i2y/connect-lean" @ "v0.1.0"
 ```
 
-The toolchain is `leanprover/lean4:v4.34.1`. Code generation needs `protoc`
-(or `buf`).
+Then run `lake update connectrpc`. connect-lean is built with the Lean version
+in its [`lean-toolchain`](lean-toolchain) (`leanprover/lean4:v4.34.1`); use the
+same in your project. Code generation needs `protoc` (or `buf`).
 
 ## Generating code
 
@@ -276,10 +281,10 @@ the configuration of what this implementation claims
 ([`conformance/config.yaml`](conformance/config.yaml)):
 
 ```bash
-go install connectrpc.com/conformance/cmd/connectconformance@v1.0.5
+./scripts/download-conformance.sh      # the test runner, into .lake/tools
 lake build conformance-server conformance-client
-connectconformance --conf conformance/config.yaml --mode server -- .lake/build/bin/conformance-server
-connectconformance --conf conformance/config.yaml --mode client -- .lake/build/bin/conformance-client
+.lake/tools/connectconformance --conf conformance/config.yaml --mode server -- .lake/build/bin/conformance-server
+.lake/tools/connectconformance --conf conformance/config.yaml --mode client -- .lake/build/bin/conformance-client
 ```
 
 ## Proofs
@@ -328,12 +333,13 @@ standard axioms (no `sorry`, no `native_decide`):
 lake build              # the library and the plugin
 lake test               # unit and end-to-end tests
 lake exe tests reset    # only the tests whose names contain "reset"
-./conformance/generate.sh   # regenerate the conformance protos (needs PROTOC_GEN_LEAN4)
 ```
 
-Set `CONNECT_HTTP2_TRACE=/some/file` to log every HTTP/2 frame sent and received.
-[docs/architecture.md](docs/architecture.md) explains how the pieces fit and
-why some of them are the way they are.
+[CONTRIBUTING.md](CONTRIBUTING.md) covers the rest: signing off commits, the
+conformance suite, and regenerating code. [docs/architecture.md](docs/architecture.md)
+explains how the pieces fit and why some of them are the way they are.
+Changes are listed in [CHANGELOG.md](CHANGELOG.md); report security issues as
+described in the [security policy](.github/SECURITY.md).
 
 Layout: `Connect/` is the runtime, `ConnectGen/` the code generator,
 `examples/eliza/` a complete example (`lake exe eliza-server`,
@@ -347,4 +353,4 @@ the way [LeanAPI](https://github.com/theoriclabs/leanapi) does.
 
 ## License
 
-Apache License 2.0.
+[Apache License 2.0](LICENSE).
