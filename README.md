@@ -307,6 +307,8 @@ standard axioms (no `sorry`, no `native_decide`):
 
 ## Limitations
 
+- **Linux and macOS.** CI builds and tests on both, and runs the conformance
+  suite on Linux; Windows is untested.
 - **No TLS** yet: `http://` only, and HTTP/2 only with prior knowledge (h2c).
 - **Over HTTP/1.1**, bidirectional streams are half-duplex (a server reads all
   of a client's messages before its first answer), gRPC is unavailable (it needs
