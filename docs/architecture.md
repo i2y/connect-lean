@@ -53,6 +53,17 @@ request into memory before its first response message over HTTP/1.1. HTTP/2
 has no such restriction. `Std.Http` also cannot send trailers, so gRPC (which
 needs them) is only served over HTTP/2.
 
+**Interceptors see typed messages, and are boxed.** A method erases its
+message types when it is registered, but keeps the typed handler inside, so it
+applies the interceptors after decoding the request (`Method.unary` and the
+rest); a client applies them in `Client.unary` and the rest, where the types
+are known. Message interceptor hooks quantify over message types, which puts
+`MessageInterceptor` in `Type 1`, yet a `Client` must stay in `Type` to be
+returned from `IO`. `MessageInterceptor.Boxed` holds one under an opaque type
+in `Type`, implemented with `unsafeCast` (the same object: boxing costs
+nothing at run time). A streaming call is a handler on servers and a call
+handle on clients, so each side has its own streaming hooks, as in connect-go.
+
 **Errors are values in `RpcM`.** Handlers and calls run in
 `ExceptT ConnectError Async`. `IO.Error`s that escape a handler reach the client
 as `unknown`.

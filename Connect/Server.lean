@@ -1,7 +1,7 @@
 module
 
 public import Std.Http
-public import Connect.Server.Context
+public import Connect.Context
 public import Connect.Server.Service
 public import Connect.Server.Core
 public import Connect.Server.Http1

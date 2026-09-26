@@ -9,6 +9,8 @@ public import Connect.Protocol
 public import Connect.Rpc
 public import Connect.Envelope
 public import Connect.Race
+public import Connect.Call
+public import Connect.Interceptor
 
 public section
 
@@ -63,6 +65,8 @@ structure ClientConfig where
   httpVersion : Transport.HttpVersion := .http1
   /-- Settings for HTTP/2 connections. -/
   http2 : Http2.Settings := {}
+  /-- Run around every call, the first outermost. -/
+  interceptors : Array Interceptor := #[]
 
 /-- Settings for one call. -/
 structure CallOptions where
@@ -77,65 +81,6 @@ structure Client where
   endpoint : Transport.Endpoint
   /-- The shared HTTP/2 connection, for clients that use HTTP/2. -/
   http2Pool : Option Http2Client.Pool
-
-/-- A unary response with its metadata. -/
-structure UnaryResponse (α : Type) where
-  message : α
-  headers : Headers
-  trailers : Headers
-
-/-- A call returning a stream of responses. Iterate with `for res in call do`. -/
-structure ServerStreamCall (Res : Type) where
-  /-- The response headers; waits for the response to start. -/
-  responseHeaders : RpcM Headers
-  /-- The next response, or `none` once the stream ended successfully. Throws
-      the RPC's error if it failed. -/
-  receive : RpcM (Option Res)
-  /-- The trailers, once `receive` returned `none` or threw. -/
-  responseTrailers : BaseIO Headers
-  /-- Abandons the call. -/
-  cancel : Async Unit
-
-/-- A call sending a stream of requests for one response. -/
-structure ClientStreamCall (Req Res : Type) where
-  send : Req → RpcM Unit
-  /-- Ends the requests and waits for the response. -/
-  closeAndReceive : RpcM Res
-  responseHeaders : RpcM Headers
-  responseTrailers : BaseIO Headers
-  cancel : Async Unit
-
-/-- A call streaming both ways. -/
-structure BidiStreamCall (Req Res : Type) where
-  send : Req → RpcM Unit
-  /-- Ends the requests; responses can still be received. -/
-  closeRequest : RpcM Unit
-  receive : RpcM (Option Res)
-  responseHeaders : RpcM Headers
-  responseTrailers : BaseIO Headers
-  cancel : Async Unit
-
-namespace ServerStreamCall
-
-@[specialize] protected partial def forIn {β : Type} (s : ServerStreamCall Res) (init : β)
-    (f : Res → β → RpcM (ForInStep β)) : RpcM β := do
-  match ← s.receive with
-  | none => return init
-  | some a =>
-    match ← f a init with
-    | .done b => return b
-    | .yield b => s.forIn b f
-
-instance : ForIn RpcM (ServerStreamCall Res) Res where
-  forIn s init f := ServerStreamCall.forIn s init f
-
-/-- Receives every remaining response. -/
-def toArray (s : ServerStreamCall Res) : RpcM (Array Res) := do
-  let mut out := #[]
-  for r in s do out := out.push r
-  return out
-
-end ServerStreamCall
 
 namespace Client
 
@@ -207,13 +152,18 @@ private def CallControl.early (c : CallControl) : BaseIO (Option ConnectError) :
 /-- Runs a transport action until the call ends early. Failures report why
     the call was ended early, if it was, or what the transport says went wrong,
     and are `unavailable` otherwise. If the action completes after the call
-    gave up on it, `onLate` releases what it produced. -/
+    gave up on it, `onLate` releases what it produced.
+
+    Reads pass `race := false`: ending a call early closes its exchange, which
+    stops them (HTTP/2 resets the stream, HTTP/1.1 cancels the pending read),
+    so they need not run in a task of their own. -/
 private def CallControl.io (c : CallControl) (act : Async α)
-    (onLate : α → Async Unit := fun _ => pure ()) : RpcM α := ExceptT.mk do
+    (onLate : α → Async Unit := fun _ => pure ()) (race := true) : RpcM α := ExceptT.mk do
   if let some e ← c.early then
     if (← c.state.get) != .finished then return .error e
   let outcome ← try
-      if c.abortable then Except.ok <$> runUntil act #[.case c.aborted.doneSelector pure] onLate
+      if c.abortable && race then
+        Except.ok <$> runUntil act #[.case c.aborted.doneSelector pure] onLate
       else (Except.ok ∘ Except.ok) <$> act
     catch e => pure (.error e)
   match outcome with
@@ -282,6 +232,32 @@ private def baseHeaders (c : Client) (opts : CallOptions) : Headers :=
   let h := c.config.headers.append opts.headers
   if h.contains HeaderName.userAgent then h else h.set HeaderName.userAgent clientUserAgent
 
+/-- What a call takes from its options or, under interceptors, from the
+    context they pass on. -/
+private structure CallSettings where
+  /-- Headers to send besides the protocol's own. -/
+  headers : Headers
+  timeoutMs : Option Nat
+  cancellation : Option Std.CancellationContext
+
+private def settingsOf (c : Client) (opts : CallOptions) : CallSettings :=
+  { headers := c.baseHeaders opts, timeoutMs := c.timeoutOf opts, cancellation := opts.cancellation }
+
+private def settingsFrom (ctx : Context) : BaseIO CallSettings := do
+  return { headers := ctx.requestHeaders, timeoutMs := ← ctx.timeRemaining
+           cancellation := some ctx.cancellation }
+
+/-- The context interceptors see for a call. -/
+private def callContext (c : Client) (spec : MethodSpec) (opts : CallOptions)
+    (httpMethod : String) : BaseIO Context := do
+  let ep := c.endpoint
+  let host := if ep.host.contains ':' then s!"[{ep.host}]" else ep.host
+  let cancellation ← match opts.cancellation with
+    | some x => pure x
+    | none => Std.CancellationContext.new
+  Context.create spec c.config.protocol httpMethod (c.baseHeaders opts) (some s!"{host}:{ep.port}")
+    (c.timeoutOf opts) cancellation (isClient := true)
+
 private def acceptList (c : Client) : String :=
   Compression.acceptList c.config.acceptCompressions
 
@@ -317,20 +293,20 @@ private partial def readBody (exchange : Transport.Exchange) (limit : Nat) (acc 
 /-! ## Connect unary -/
 
 private def unaryConnect [Message Req] [Message Res] (c : Client) (spec : MethodSpec) (req : Req)
-    (opts : CallOptions) : RpcM (UnaryResponse Res) := do
+    (settings : CallSettings) : RpcM (UnaryResponse Res) := do
   let cfg := c.config
-  let timeout := c.timeoutOf opts
+  let timeout := settings.timeoutMs
   let deadline := timeout.map ((← IO.monoMsNow) + ·)
   let payload ← RpcM.ofIOExcept (cfg.codec.encode req)
   let (payload, sentWith) := match cfg.sendCompression with
     | some comp => (comp.compress payload, some comp.name)
     | none => (payload, none)
-  let mut headers := c.baseHeaders opts
+  let mut headers := settings.headers
     |>.set HeaderName.connectProtocolVersion "1"
     |>.set HeaderName.acceptEncoding (acceptList c)
   if let some t := timeout then headers := headers.set HeaderName.connectTimeout (toString t)
   let useGet := cfg.useHttpGet && spec.idempotency == .noSideEffects
-  let ctl ← CallControl.new deadline opts.cancellation (cancellable := false)
+  let ctl ← CallControl.new deadline settings.cancellation (cancellable := false)
   let exchange ← ctl.start <|
     if useGet then
       let message := match cfg.codec, sentWith with
@@ -348,11 +324,11 @@ private def unaryConnect [Message Req] [Message Res] (c : Client) (spec : Method
         | none => h
       c.startExchange "POST" spec.procedure h (.fixed payload)
   try
-    let (status, respHeaders) ← ctl.io exchange.head
+    let (status, respHeaders) ← ctl.io exchange.head (race := false)
     let (userHeaders, trailers) := splitUnaryTrailers (userMetadata respHeaders)
     -- An error body is JSON; read it whole, with room for a long message.
     let limit := if status == 200 then cfg.readMaxBytes else max cfg.readMaxBytes 65536
-    let some body ← ctl.io (readBody exchange limit)
+    let some body ← ctl.io (readBody exchange limit) (race := false)
       | throw (.resourceExhausted s!"message is larger than configured max {cfg.readMaxBytes}")
     let comp ← RpcM.ofExcept (c.responseCompression (respHeaders.get? HeaderName.contentEncoding))
     let contentType := ContentType.normalize ((respHeaders.get? HeaderName.contentType).getD "")
@@ -391,16 +367,16 @@ private structure Session where
 /-- Opens an enveloped call. `cancellable`: whether its caller gets a `cancel`.
     A call with a single request passes it as `request`: it then goes out with
     the headers, as a body of known length, and the session sends nothing more. -/
-private def openSession (c : Client) (spec : MethodSpec) (opts : CallOptions)
+private def openSession (c : Client) (spec : MethodSpec) (settings : CallSettings)
     (cancellable : Bool := true) (request : Option ByteArray := none) : RpcM Session := do
   let cfg := c.config
   let connect := cfg.protocol == .connect
-  let timeout := c.timeoutOf opts
+  let timeout := settings.timeoutMs
   let deadline := timeout.map ((← IO.monoMsNow) + ·)
   let (encodingHeader, acceptHeader) :=
     if connect then (HeaderName.connectContentEncoding, HeaderName.connectAcceptEncoding)
     else (HeaderName.grpcEncoding, HeaderName.grpcAcceptEncoding)
-  let mut headers := c.baseHeaders opts
+  let mut headers := settings.headers
     |>.set HeaderName.contentType (ContentType.render cfg.protocol cfg.codec true)
     |>.set acceptHeader (acceptList c)
   if let some comp := cfg.sendCompression then headers := headers.set encodingHeader comp.name
@@ -419,7 +395,7 @@ private def openSession (c : Client) (spec : MethodSpec) (opts : CallOptions)
   let body := match request with
     | some payload => .fixed (envelope payload)
     | none => .chunked
-  let ctl ← CallControl.new deadline opts.cancellation cancellable
+  let ctl ← CallControl.new deadline settings.cancellation cancellable
   let exchange ← ctl.start (c.startExchange "POST" spec.procedure headers body)
   let headState ← IO.mkRef (none : Option (Headers × Compression))
   -- gRPC headers carrying a status: the whole answer, unless a body or
@@ -438,7 +414,7 @@ private def openSession (c : Client) (spec : MethodSpec) (opts : CallOptions)
     throw e
   let responseHeaders : RpcM Headers := do
     if let some (h, _) := ← headState.get then return h
-    let (status, respHeaders) ← ctl.io exchange.head
+    let (status, respHeaders) ← ctl.io exchange.head (race := false)
     let userHeaders := userMetadata respHeaders
     -- gRPC-Web may answer with the status in the headers ("trailers-only").
     -- It counts only if no body follows, which `receive` finds out.
@@ -503,7 +479,7 @@ private def openSession (c : Client) (spec : MethodSpec) (opts : CallOptions)
       else
         return some payload
     | none =>
-      match ← ctl.io exchange.read with
+      match ← ctl.io exchange.read (race := false) with
       | some bytes =>
         unless bytes.isEmpty do bodySeen.set true
         readerRef.modify (·.feed bytes)
@@ -554,15 +530,34 @@ private def receiveOne [Message Res] (c : Client) (s : Session) : RpcM Res := do
     throw (.unimplemented "unary response has multiple messages")
   return res
 
-/-! ## Calls -/
+/-! ## Calls
 
-/-- Calls a unary method, returning the response with its headers and trailers. -/
-def unaryWithMetadata [Message Req] [Message Res] (c : Client) (spec : MethodSpec) (req : Req)
-    (opts : CallOptions := {}) : RpcM (UnaryResponse Res) := do
+Each call runs as it is when the client has no interceptors, and otherwise
+inside them, with a `Context` they may pass on changed. -/
+
+/-- Whether a unary call uses `GET`. -/
+private def usesGet (c : Client) (spec : MethodSpec) : Bool :=
+  c.config.protocol == .connect && c.config.useHttpGet && spec.idempotency == .noSideEffects
+
+/-- Keeps a call's response metadata in `ctx`, for interceptors: `headers` and
+    `trailers` once it ended, or those of its error. -/
+private def record (ctx : Context) (outcome : Except ConnectError Unit) (headers : RpcM Headers)
+    (trailers : BaseIO Headers) : RpcM Unit := do
+  match outcome with
+  | .ok () =>
+    if let .ok h ← RpcM.attempt headers then ctx.responseHeadersRef.set h
+    ctx.responseTrailersRef.set (← trailers)
+  | .error e =>
+    ctx.responseHeadersRef.set e.headers
+    ctx.responseTrailersRef.set e.trailers
+
+private def unaryPlain [Message Req] [Message Res] (c : Client) (spec : MethodSpec) (req : Req)
+    (settings : CallSettings) : RpcM (UnaryResponse Res) := do
   if c.config.protocol == .connect then
-    unaryConnect c spec req opts
+    unaryConnect c spec req settings
   else
-    let s ← openSession c spec opts (cancellable := false) (request := some (← encodeMessage c req))
+    let s ← openSession c spec settings (cancellable := false)
+      (request := some (← encodeMessage c req))
     -- Closes the exchange if the call fails before it ends by itself.
     try
       let message ← receiveOne c s
@@ -570,15 +565,31 @@ def unaryWithMetadata [Message Req] [Message Res] (c : Client) (spec : MethodSpe
     finally
       s.cancel
 
+/-- Calls a unary method, returning the response with its headers and trailers. -/
+def unaryWithMetadata [Message Req] [Message Res] (c : Client) (spec : MethodSpec) (req : Req)
+    (opts : CallOptions := {}) : RpcM (UnaryResponse Res) := do
+  let interceptors := c.config.interceptors
+  if interceptors.isEmpty then return ← c.unaryPlain spec req (c.settingsOf opts)
+  let ctx ← c.callContext spec opts (if c.usesGet spec then "GET" else "POST")
+  let call : UnaryFunc Req Res := fun ctx req => do
+    match ← RpcM.attempt (c.unaryPlain spec req (← settingsFrom ctx)) with
+    | .ok r =>
+      record ctx (.ok ()) (pure r.headers) (pure r.trailers)
+      return r.message
+    | .error e =>
+      record ctx (.error e) (pure {}) (pure {})
+      throw e
+  let message ← Interceptor.wrapUnary interceptors call ctx req
+  return { message, headers := ← ctx.responseHeaders, trailers := ← ctx.responseTrailers }
+
 /-- Calls a unary method. -/
 def unary [Message Req] [Message Res] (c : Client) (spec : MethodSpec) (req : Req)
     (opts : CallOptions := {}) : RpcM Res :=
   (·.message) <$> c.unaryWithMetadata spec req opts
 
-/-- Calls a server-streaming method. -/
-def serverStream [Message Req] [Message Res] (c : Client) (spec : MethodSpec) (req : Req)
-    (opts : CallOptions := {}) : RpcM (ServerStreamCall Res) := do
-  let s ← openSession c spec opts (request := some (← encodeMessage c req))
+private def serverStreamPlain [Message Req] [Message Res] (c : Client) (spec : MethodSpec)
+    (req : Req) (settings : CallSettings) : RpcM (ServerStreamCall Res) := do
+  let s ← openSession c spec settings (request := some (← encodeMessage c req))
   return {
     responseHeaders := s.responseHeaders
     receive := do
@@ -588,10 +599,26 @@ def serverStream [Message Req] [Message Res] (c : Client) (spec : MethodSpec) (r
     responseTrailers := s.trailers
     cancel := s.cancel }
 
-/-- Starts a client-streaming call. -/
-def clientStream [Message Req] [Message Res] (c : Client) (spec : MethodSpec)
-    (opts : CallOptions := {}) : RpcM (ClientStreamCall Req Res) := do
-  let s ← openSession c spec opts
+/-- Calls a server-streaming method. -/
+def serverStream [Message Req] [Message Res] (c : Client) (spec : MethodSpec) (req : Req)
+    (opts : CallOptions := {}) : RpcM (ServerStreamCall Res) := do
+  let interceptors := c.config.interceptors
+  if interceptors.isEmpty then return ← c.serverStreamPlain spec req (c.settingsOf opts)
+  let ctx ← c.callContext spec opts "POST"
+  let start : ServerStreamCallFunc Req Res := fun ctx req => do
+    let call ← c.serverStreamPlain spec req (← settingsFrom ctx)
+    return { call with
+      receive := do
+        match ← RpcM.attempt call.receive with
+        | .ok r =>
+          if r.isNone then record ctx (.ok ()) call.responseHeaders call.responseTrailers
+          return r
+        | .error e => record ctx (.error e) (pure {}) (pure {}); throw e }
+  Interceptor.wrapServerStreamCall interceptors start ctx req
+
+private def clientStreamPlain [Message Req] [Message Res] (c : Client) (spec : MethodSpec)
+    (settings : CallSettings) : RpcM (ClientStreamCall Req Res) := do
+  let s ← openSession c spec settings
   return {
     send := fun req => do s.send (← encodeMessage c req)
     closeAndReceive := do s.closeSend; receiveOne c s
@@ -599,10 +626,26 @@ def clientStream [Message Req] [Message Res] (c : Client) (spec : MethodSpec)
     responseTrailers := s.trailers
     cancel := s.cancel }
 
-/-- Starts a bidirectional-streaming call. -/
-def bidiStream [Message Req] [Message Res] (c : Client) (spec : MethodSpec)
-    (opts : CallOptions := {}) : RpcM (BidiStreamCall Req Res) := do
-  let s ← openSession c spec opts
+/-- Starts a client-streaming call. -/
+def clientStream [Message Req] [Message Res] (c : Client) (spec : MethodSpec)
+    (opts : CallOptions := {}) : RpcM (ClientStreamCall Req Res) := do
+  let interceptors := c.config.interceptors
+  if interceptors.isEmpty then return ← c.clientStreamPlain spec (c.settingsOf opts)
+  let ctx ← c.callContext spec opts "POST"
+  let start : ClientStreamCallFunc Req Res := fun ctx => do
+    let call ← c.clientStreamPlain spec (← settingsFrom ctx)
+    return { call with
+      closeAndReceive := do
+        match ← RpcM.attempt call.closeAndReceive with
+        | .ok res =>
+          record ctx (.ok ()) call.responseHeaders call.responseTrailers
+          return res
+        | .error e => record ctx (.error e) (pure {}) (pure {}); throw e }
+  Interceptor.wrapClientStreamCall interceptors start ctx
+
+private def bidiStreamPlain [Message Req] [Message Res] (c : Client) (spec : MethodSpec)
+    (settings : CallSettings) : RpcM (BidiStreamCall Req Res) := do
+  let s ← openSession c spec settings
   return {
     send := fun req => do s.send (← encodeMessage c req)
     closeRequest := s.closeSend
@@ -613,6 +656,23 @@ def bidiStream [Message Req] [Message Res] (c : Client) (spec : MethodSpec)
     responseHeaders := s.responseHeaders
     responseTrailers := s.trailers
     cancel := s.cancel }
+
+/-- Starts a bidirectional-streaming call. -/
+def bidiStream [Message Req] [Message Res] (c : Client) (spec : MethodSpec)
+    (opts : CallOptions := {}) : RpcM (BidiStreamCall Req Res) := do
+  let interceptors := c.config.interceptors
+  if interceptors.isEmpty then return ← c.bidiStreamPlain spec (c.settingsOf opts)
+  let ctx ← c.callContext spec opts "POST"
+  let start : BidiStreamCallFunc Req Res := fun ctx => do
+    let call ← c.bidiStreamPlain spec (← settingsFrom ctx)
+    return { call with
+      receive := do
+        match ← RpcM.attempt call.receive with
+        | .ok r =>
+          if r.isNone then record ctx (.ok ()) call.responseHeaders call.responseTrailers
+          return r
+        | .error e => record ctx (.error e) (pure {}) (pure {}); throw e }
+  Interceptor.wrapBidiStreamCall interceptors start ctx
 
 end Client
 

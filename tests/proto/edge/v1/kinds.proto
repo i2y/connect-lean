@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package edge.v1;
+
+import "edge/v1/types.proto";
+
+// One method of each kind, for the interceptor tests.
+service KindsService {
+  rpc Unary(Ping) returns (Pong);
+  rpc ClientStream(stream Ping) returns (Pong);
+  rpc ServerStream(Ping) returns (stream Pong);
+  rpc BidiStream(stream Ping) returns (stream Pong);
+}

@@ -82,6 +82,20 @@ instance [Protobuf.ProtoMessage α] [Protobuf.Reflection.ReflectMessage α] : Me
     let r ← Protobuf.Json.fromJsonString text α opts
     return r.mapError toString
 
+namespace Message
+
+/-- The protobuf name of `msg`'s type, such as `connectrpc.eliza.v1.SayRequest`.
+    Handy where the type has no name in scope, as in interceptor hooks. -/
+def typeNameOf [Message α] (_ : α) : String := Message.typeName α
+
+/-- `msg` in ProtoJSON, for logging. -/
+def toJsonString [Message α] (msg : α) : IO String := do
+  match ← Message.encodeJson msg with
+  | .ok bytes => return (String.fromUTF8? bytes).getD "<not UTF-8>"
+  | .error e => return s!"<{e}>"
+
+end Message
+
 namespace Codec
 
 /-- Serializes a message. A failure is an `internal` error: the message itself

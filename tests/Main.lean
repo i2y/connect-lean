@@ -5,6 +5,7 @@ import Tests.Integration
 import Tests.Http2
 import Tests.Edge
 import Tests.Robustness
+import Tests.Interceptors
 
 /-- `tests [filter]`: runs the tests whose names contain `filter`. -/
 def main (args : List String) : IO UInt32 :=
@@ -20,5 +21,6 @@ def main (args : List String) : IO UInt32 :=
     ("http2 frames", Tests.Http2.frameTests),
     ("integration", Tests.Integration.tests),
     ("robustness", Tests.Robustness.tests),
+    ("interceptors", Tests.Interceptors.tests),
     ("generated code", Tests.Edge.tests)
   ]

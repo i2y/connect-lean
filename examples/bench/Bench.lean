@@ -5,7 +5,10 @@ import ElizaGen.connectrpc.eliza.v1.eliza_connect
 A rough throughput check: a server and clients in one process, `workers`
 concurrent callers making unary calls for a few seconds.
 
-`lake exe bench [connect|grpc|grpc-web] [h2] [workers] [seconds]`
+`lake exe bench [connect|grpc|grpc-web] [h2] [intercepted] [workers] [seconds]`
+
+`intercepted` puts a pass-through metadata interceptor and a pass-through
+message interceptor on both the server and the client.
 -/
 
 open Connect connectrpc.eliza.v1
@@ -23,11 +26,15 @@ def main (args : List String) : IO Unit := do
   let protocol := if args.contains "grpc-web" then Protocol.grpcWeb
     else if args.contains "grpc" then .grpc else .connect
   let httpVersion := if args.contains "h2" then Transport.HttpVersion.http2 else .http1
+  let interceptors : Array Interceptor := if args.contains "intercepted" then
+      #[Interceptor.before fun _ => pure (), ({} : MessageInterceptor)]
+    else #[]
   let nums := args.filterMap String.toNat?
   let workers := nums[0]?.getD 16
   let seconds := nums[1]?.getD 5
-  let running ← Server.start (Router.empty.register echo) {} { port := 0 }
-  let conn ← Client.create { baseUrl := s!"http://127.0.0.1:{running.port}", protocol, httpVersion }
+  let running ← Server.start (Router.empty.register echo) { interceptors } { port := 0 }
+  let conn ← Client.create {
+    baseUrl := s!"http://127.0.0.1:{running.port}", protocol, httpVersion, interceptors }
   let client : ElizaService.Client := { connection := conn }
   let count ← IO.mkRef 0
   let start ← IO.monoMsNow
@@ -37,5 +44,6 @@ def main (args : List String) : IO Unit := do
   let elapsed := (← IO.monoMsNow) - start
   let n ← count.get
   let failures := results.filter (·.toBool == false) |>.size
-  IO.println s!"{protocol} over {repr httpVersion}, {workers} workers: {n} calls in {elapsed} ms = {n * 1000 / elapsed} calls/s ({failures} workers failed)"
+  let label := if interceptors.isEmpty then "" else ", intercepted"
+  IO.println s!"{protocol} over {repr httpVersion}{label}, {workers} workers: {n} calls in {elapsed} ms = {n * 1000 / elapsed} calls/s ({failures} workers failed)"
   running.shutdown

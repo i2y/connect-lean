@@ -9,12 +9,12 @@ public import Connect.Protocol
 public section
 
 /-!
-# Handler context
+# Call context
 
-A handler receives a `Context` describing the RPC it serves: the method, the
-protocol the client speaks, the request headers and the deadline. Through it,
-the handler sets response headers and trailers, and learns when the client has
-gone away.
+A `Context` describes one call: the method, the protocol, the request headers
+and the deadline. A handler receives one for the RPC it serves; through it, it
+sets response headers and trailers, and learns when the client has gone away.
+Interceptors receive one too, on servers and on clients (`isClient`).
 
 Streaming handlers also receive a `RequestStream` to read the client's
 messages, a `ResponseStream` to send their own, or both.
@@ -22,7 +22,8 @@ messages, a `ResponseStream` to send their own, or both.
 
 namespace Connect
 
-/-- What a handler knows about the RPC it serves. -/
+/-- What is known about a call: by a handler about the RPC it serves, or by an
+    interceptor, on either side. -/
 structure Context where
   /-- The method being called. -/
   spec : MethodSpec
@@ -30,20 +31,28 @@ structure Context where
   protocol : Protocol
   /-- `POST`, or `GET` for Connect's cacheable unary calls. -/
   httpMethod : String
-  /-- The request headers, including the client's custom metadata. -/
+  /-- The request headers, including the client's custom metadata. On clients,
+      the headers the call sends besides the protocol's own: an interceptor
+      adds some by passing on `{ ctx with requestHeaders := … }`. -/
   requestHeaders : Headers
-  /-- The client's address, when the transport knows it. -/
+  /-- The other side's address, when known: the client's on servers, the
+      server's on clients. -/
   peer : Option String := none
   /-- The timeout the client asked for, in milliseconds. -/
   timeoutMs : Option Nat := none
   /-- When the client stops waiting, in `IO.monoMsNow` milliseconds. -/
   deadline : Option Nat := none
-  /-- Cancelled when the client disconnects or the deadline passes. -/
+  /-- On servers, cancelled when the client disconnects or the deadline
+      passes. On clients, cancelling it cancels the call. -/
   cancellation : Std.CancellationContext
-  /-- Headers to send before the first response message. Prefer `setResponseHeader`. -/
+  /-- Headers to send before the first response message (on clients, the ones
+      received). Prefer `setResponseHeader`. -/
   responseHeadersRef : IO.Ref Headers
-  /-- Trailers to send after the last response message. Prefer `setResponseTrailer`. -/
+  /-- Trailers to send after the last response message (on clients, the ones
+      received). Prefer `setResponseTrailer`. -/
   responseTrailersRef : IO.Ref Headers
+  /-- Whether this is a client's view of the call. -/
+  isClient : Bool := false
 
 namespace Context
 
@@ -51,10 +60,10 @@ namespace Context
     absolute deadline. -/
 def create (spec : MethodSpec) (protocol : Protocol) (httpMethod : String)
     (requestHeaders : Headers) (peer : Option String) (timeoutMs : Option Nat)
-    (cancellation : Std.CancellationContext) : BaseIO Context := do
+    (cancellation : Std.CancellationContext) (isClient := false) : BaseIO Context := do
   let now ← IO.monoMsNow
   return {
-    spec, protocol, httpMethod, requestHeaders, peer, cancellation, timeoutMs
+    spec, protocol, httpMethod, requestHeaders, peer, cancellation, timeoutMs, isClient
     deadline := timeoutMs.map (now + ·)
     responseHeadersRef := ← IO.mkRef {}
     responseTrailersRef := ← IO.mkRef {} }

@@ -54,12 +54,13 @@ def new (socket : Socket.Client) (aborted : Std.CancellationContext) : BaseIO Re
     exchange is aborted. -/
 def fill (r : Reader) : Async Bool := do
   if ← r.eof.get then return false
-  let aborted := do
-    if ← r.aborted.isCancelled then throw (IO.userError "the exchange was aborted")
-  aborted
-  let received ← r.socket.recv? 65536
-  -- Aborting cancels a pending read, which then looks like the end of the stream.
-  aborted
+  -- Aborting cancels a pending read, which then looks like the end of the
+  -- stream. The read starts before the check, so an abort either comes after
+  -- it starts, and cancels it, or before the check, which sees it.
+  let pending ← r.socket.native.recv? 65536
+  if ← r.aborted.isCancelled then r.socket.native.cancelRecv
+  let received ← Std.Async.Async.ofPromise (pure pending)
+  if ← r.aborted.isCancelled then throw (IO.userError "the exchange was aborted")
   match received with
   | none => r.eof.set true; return false
   | some bytes =>

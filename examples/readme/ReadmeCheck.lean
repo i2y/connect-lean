@@ -28,18 +28,37 @@ def eliza : ElizaService where
 def serveMain : IO Unit :=
   Connect.serve (Router.empty.register eliza) (cfg := { port := 8080 })
 
+def timing : MetadataInterceptor Nat where
+  onStart _ := IO.monoMsNow
+  onEnd started ctx err? := do
+    let ms := (← IO.monoMsNow) - started
+    IO.eprintln s!"{ctx.spec.procedure}: {ms} ms, {(err?.map toString).getD "ok"}"
+
 def auth : Interceptor := .before fun ctx => do
   unless ctx.requestHeaders.get? "authorization" == some "Bearer secret" do
     throw (.unauthenticated "missing token")
 
-def logging : Interceptor := .after fun ctx err? => do
-  IO.eprintln s!"{ctx.spec.procedure}: {(err?.map toString).getD "ok"}"
+-- Logs every unary request, on either side.
+def logRequests : MessageInterceptor where
+  unary next ctx req := do
+    IO.eprintln s!"{ctx.spec.procedure} {← Message.toJsonString req}"
+    next ctx req
+
+-- On a client: sends a token with every unary call.
+def withToken : MessageInterceptor where
+  unary next ctx req := do
+    next { ctx with requestHeaders := ctx.requestHeaders.set "authorization" "Bearer secret" } req
+
+def interceptedClient : IO Connect.Client := do
+  let connection ← Connect.Client.create {
+    baseUrl := "http://localhost:8080", interceptors := #[withToken, timing] }
+  return connection
 
 def serveWithOptions (router : Router) : IO Unit :=
   Connect.serve router {
     readMaxBytes := 1024 * 1024                -- largest request message
     compressions := #[Compression.gzip]        -- besides identity
-    interceptors := #[auth, logging]           -- first one outermost
+    interceptors := #[auth, timing, logRequests] -- first one outermost
   }
 
 def clientMain : IO Unit := do

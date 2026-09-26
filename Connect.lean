@@ -10,5 +10,8 @@ public import Connect.Compression
 public import Connect.Method
 public import Connect.Protocol
 public import Connect.Rpc
+public import Connect.Context
+public import Connect.Call
+public import Connect.Interceptor
 public import Connect.Server
 public import Connect.Client

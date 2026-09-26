@@ -26,6 +26,11 @@ def run (x : RpcM α) : Std.Async.Async (Except ConnectError α) := do
   try ExceptT.run x
   catch e => return .error (.unknown (toString e))
 
+/-- Runs `x`, returning its outcome rather than failing; an `IO.Error` becomes
+    `unknown`. (`try … catch` inside `RpcM` would not see an `IO.Error`.) -/
+def attempt (x : RpcM α) : RpcM (Except ConnectError α) :=
+  ExceptT.mk (Except.ok <$> run x)
+
 /-- Lifts an `Except` into `RpcM`. -/
 def ofExcept (x : Except ConnectError α) : RpcM α :=
   match x with

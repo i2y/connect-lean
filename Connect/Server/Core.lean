@@ -154,9 +154,12 @@ private inductive UnaryInput where
 
 /-- The body of `connectUnary`, once the context exists. -/
 private def connectUnaryCall (opts : ServerOptions) (req : ServerRequest)
-    (run : Context → Codec → ByteArray → RpcM ByteArray) (input : UnaryInput) (res : ResponseWriter)
-    (ctx : Context) : Async Unit := do
-  let outcome ← RpcM.run do
+    (run : Array Interceptor → Context → Codec → ByteArray → RpcM ByteArray) (input : UnaryInput)
+    (res : ResponseWriter) (ctx : Context) : Async Unit := do
+  let (leading, chain) := Interceptor.splitLeading opts.interceptors
+  -- Metadata interceptors at the front start before the request is read...
+  let (started, refused) ← Interceptor.startAll leading ctx
+  let outcome ← if let some e := refused then pure (.error e) else RpcM.run do
     let (codec, payload) ← match input with
       | .post codec => do
         let comp ← RpcM.ofExcept (findCompression opts
@@ -184,9 +187,10 @@ private def connectUnaryCall (opts : ServerOptions) (req : ServerRequest)
             s!"request message is larger than configured max {opts.readMaxBytes}")
         let comp ← RpcM.ofExcept (findCompression opts ((param "compression").getD "identity"))
         pure (codec, ← RpcM.ofExcept (comp.decompressPayload message opts.readMaxBytes))
-    let response ← withDeadline ctx <|
-      Interceptor.applyAll opts.interceptors ctx (run ctx codec payload)
+    let response ← withDeadline ctx (run chain ctx codec payload)
     return (codec, response)
+  -- ...and end before the response is written, so they can still change it.
+  let outcome ← Interceptor.finishAll started outcome
   let headers ← ctx.responseHeaders
   let trailers ← ctx.responseTrailers
   match outcome with
@@ -205,8 +209,8 @@ private def connectUnaryCall (opts : ServerOptions) (req : ServerRequest)
 
 /-- Serves a Connect unary call, from a POST body or a GET query. -/
 private def connectUnary (opts : ServerOptions) (req : ServerRequest) (method : Method)
-    (run : Context → Codec → ByteArray → RpcM ByteArray) (input : UnaryInput) (res : ResponseWriter) :
-    Async Unit := do
+    (run : Array Interceptor → Context → Codec → ByteArray → RpcM ByteArray) (input : UnaryInput)
+    (res : ResponseWriter) : Async Unit := do
   let httpMethod := match input with | .post _ => "POST" | .get => "GET"
   let checked : Except ConnectError (Option Nat) := do
     if let .post _ := input then checkProtocolVersion opts req.headers
@@ -333,17 +337,22 @@ private def streaming (opts : ServerOptions) (req : ServerRequest) (method : Met
     else
       sendHead
       res.write env.encode
+  let (leading, chain) := Interceptor.splitLeading opts.interceptors
   let call : RpcM Unit := do
     let (_, comp) ← RpcM.ofExcept setup
     let receive := reqBody.receive comp
     let codec := kind.codec
-    withDeadline ctx <| Interceptor.applyAll opts.interceptors ctx <|
+    withDeadline ctx <|
       match method.impl with
-      | .unary run => do send (← run ctx codec (← receiveOne receive))
-      | .serverStream run => do run ctx codec (← receiveOne receive) send
-      | .clientStream run => do send (← run ctx codec receive)
-      | .bidiStream run => run ctx codec receive send
-  let outcome ← RpcM.run call
+      | .unary run => do send (← run chain ctx codec (← receiveOne receive))
+      | .serverStream run => do run chain ctx codec (← receiveOne receive) send
+      | .clientStream run => do send (← run chain ctx codec receive)
+      | .bidiStream run => run chain ctx codec receive send
+  -- Metadata interceptors at the front start before the first request is read,
+  -- and end before the response does, so they can still set its trailers.
+  let (started, refused) ← Interceptor.startAll leading ctx
+  let outcome ← if let some e := refused then pure (.error e) else RpcM.run call
+  let outcome ← Interceptor.finishAll started outcome
   let err := match outcome with | .ok () => none | .error e => some e
   let mut trailers ← ctx.responseTrailers
   if let some e := err then

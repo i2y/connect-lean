@@ -39,8 +39,10 @@ $ curl -X POST localhost:8080/greet.v1.GreetService/Greet \
 - **Streaming:** unary, client, server and bidirectional RPCs, full-duplex over
   HTTP/2.
 - **Compression:** gzip, implemented in Lean; others can be plugged in.
-- **Also:** deadlines, cancellation, interceptors, headers and trailers, typed
-  error details, message size limits.
+- **Interceptors** on servers and clients, as in connect-py: metadata
+  interceptors around every call, and message interceptors for each kind of call.
+- **Also:** deadlines, cancellation, headers and trailers, typed error details,
+  message size limits.
 - **Code generation:** `protoc-gen-connect-lean` turns services into a
   structure of handlers and a typed client.
 - **Proofs:** the pure codecs come with theorems, such as envelope framing
@@ -153,21 +155,65 @@ with port `0` in tests). To serve Connect next to other routes in your own
 Connect.serve router {
   readMaxBytes := 1024 * 1024                -- largest request message
   compressions := #[Compression.gzip]        -- besides identity
-  interceptors := #[auth, logging]           -- first one outermost
+  interceptors := #[auth, timing, logRequests] -- first one outermost
 }
 ```
 
 ### Interceptors
 
-An interceptor wraps every call, and sees its `Context`:
+Interceptors run around calls, on servers (`ServerOptions.interceptors`) and
+on clients (`ClientConfig.interceptors`), the first in the list outermost. As
+in connect-py, there are two kinds.
+
+A **metadata interceptor** sees each call's `Context` as it starts and its
+outcome as it ends; what `onStart` returns goes to `onEnd`:
 
 ```lean
+def timing : MetadataInterceptor Nat where
+  onStart _ := IO.monoMsNow
+  onEnd started ctx err? := do
+    let ms := (← IO.monoMsNow) - started
+    IO.eprintln s!"{ctx.spec.procedure}: {ms} ms, {(err?.map toString).getD "ok"}"
+
 def auth : Interceptor := .before fun ctx => do
   unless ctx.requestHeaders.get? "authorization" == some "Bearer secret" do
     throw (.unauthenticated "missing token")
+```
 
-def logging : Interceptor := .after fun ctx err? => do
-  IO.eprintln s!"{ctx.spec.procedure}: {(err?.map toString).getD "ok"}"
+Throwing from `onStart` (or `before`) refuses the call; throwing from `onEnd`
+(or `after`) replaces its outcome. On servers, the metadata interceptors at the
+front of the list start before the request is read, so a call can be refused
+without reading its body, and end before the response is written, so they can
+still set response headers and trailers.
+
+A **message interceptor** sees the messages too, with a hook for each kind of
+call. A hook gets `next`, the rest of the chain, and may change the request or
+the context it passes on, change the response, answer without calling `next`,
+or call it again:
+
+```lean
+-- Logs every unary request, on either side.
+def logRequests : MessageInterceptor where
+  unary next ctx req := do
+    IO.eprintln s!"{ctx.spec.procedure} {← Message.toJsonString req}"
+    next ctx req
+
+-- On a client: sends a token with every unary call.
+def withToken : MessageInterceptor where
+  unary next ctx req := do
+    next { ctx with requestHeaders := ctx.requestHeaders.set "authorization" "Bearer secret" } req
+```
+
+Hooks are polymorphic in the message types: they reach messages through their
+`Message` instances (ProtoJSON, binary, the type's name). A unary call looks the
+same on both sides; a streaming call has hooks on servers (`clientStream`,
+`serverStream`, `bidiStream`, around the handler and its streams) and on
+clients (`clientStreamCall`, `serverStreamCall`, `bidiStreamCall`, around the
+call handle). Both kinds of interceptor go in the same list:
+
+```lean
+let connection ← Connect.Client.create {
+  baseUrl := "http://localhost:8080", interceptors := #[withToken, timing] }
 ```
 
 ## Clients
