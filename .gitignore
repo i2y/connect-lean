@@ -1,0 +1,5 @@
+/.lake
+*.olean
+/conformance/.lake
+/examples/*/.lake
+.DS_Store

@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package edge.v1;
+
+message Ping {
+  string text = 1;
+}
+
+message Pong {
+  string text = 1;
+}

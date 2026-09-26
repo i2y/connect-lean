@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package edge.v1;
+
+import "edge/v1/types.proto";
+
+// Method names that collide with what the generator adds, or with Lean keywords.
+service EdgeService {
+  // A method called Client: the client structure is `Client` too.
+  rpc Client(Ping) returns (Pong);
+  rpc ServiceName(Ping) returns (Pong);
+  rpc Mk(Ping) returns (Pong);
+  rpc Connection(Ping) returns (Pong);
+  rpc End(Ping) returns (Pong);
+  rpc Where(stream Ping) returns (stream Pong);
+  rpc get_thing(Ping) returns (Pong) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+  rpc Deprecated(Ping) returns (Pong) {
+    option deprecated = true;
+  }
+}
+
+// A service with no methods at all.
+service EmptyService {}
+
+// A service on its way out.
+service OldService {
+  option deprecated = true;
+  rpc Ping(edge.v1.Ping) returns (edge.v1.Pong);
+}

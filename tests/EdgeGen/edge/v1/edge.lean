@@ -1,0 +1,14 @@
+module
+
+public import Protobuf.Encoding
+public import Protobuf.ProtoMessage
+public import Protobuf.Base64
+public import Protobuf.Reflection
+meta import Protobuf.Notation
+public import «EdgeGen».«edge».«v1».«types»
+
+public section
+
+open Protobuf Encoding
+open scoped Protobuf.Notation
+ private  initialize  «protobuf.fileDescriptor.656467652f76312f656467652e70726f746f»  :  «Protobuf».«Reflection».«FileDescriptor»  ←  «Protobuf».«Reflection».«generatedPool».«registerFileBase64!»  "ChJlZGdlL3YxL2VkZ2UucHJvdG8SB2VkZ2UudjEaE2VkZ2UvdjEvdHlwZXMucHJvdG8y4wIKC0VkZ2VTZXJ2aWNlEiYKBkNsaWVudBINLmVkZ2UudjEuUGluZxoNLmVkZ2UudjEuUG9uZxIrCgtTZXJ2aWNlTmFtZRINLmVkZ2UudjEuUGluZxoNLmVkZ2UudjEuUG9uZxIiCgJNaxINLmVkZ2UudjEuUGluZxoNLmVkZ2UudjEuUG9uZxIqCgpDb25uZWN0aW9uEg0uZWRnZS52MS5QaW5nGg0uZWRnZS52MS5Qb25nEiMKA0VuZBINLmVkZ2UudjEuUGluZxoNLmVkZ2UudjEuUG9uZxIpCgVXaGVyZRINLmVkZ2UudjEuUGluZxoNLmVkZ2UudjEuUG9uZygBMAESLgoJZ2V0X3RoaW5nEg0uZWRnZS52MS5QaW5nGg0uZWRnZS52MS5Qb25nIgOQAgESLwoKRGVwcmVjYXRlZBINLmVkZ2UudjEuUGluZxoNLmVkZ2UudjEuUG9uZyIDiAIBMg4KDEVtcHR5U2VydmljZTI3CgpPbGRTZXJ2aWNlEiQKBFBpbmcSDS5lZGdlLnYxLlBpbmcaDS5lZGdlLnYxLlBvbmcaA4gCAWIGcHJvdG8z" 

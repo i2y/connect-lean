@@ -1,0 +1,13 @@
+# Run from examples/eliza: `buf generate`
+#
+# protoc-gen-lean4 writes the message types (ElizaGen/.../eliza.lean);
+# protoc-gen-connect-lean writes the service stubs (ElizaGen/.../eliza_connect.lean).
+# Both need the same lean4_prefix, the module prefix of the output directory.
+version: v2
+plugins:
+  - local: ../../.lake/tools/protoc-gen-lean4
+    out: ElizaGen
+    opt: lean4_prefix=ElizaGen
+  - local: ../../.lake/build/bin/protoc-gen-connect-lean
+    out: ElizaGen
+    opt: lean4_prefix=ElizaGen

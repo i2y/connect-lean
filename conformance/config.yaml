@@ -1,0 +1,30 @@
+# Features of connect-lean, for connectrpc/conformance.
+# HTTP/1.1 goes through Std.Http; HTTP/2 is served without TLS (h2c) on the
+# same port. TLS is not supported yet.
+features:
+  versions:
+    - HTTP_VERSION_1
+    - HTTP_VERSION_2
+  protocols:
+    - PROTOCOL_CONNECT
+    - PROTOCOL_GRPC
+    - PROTOCOL_GRPC_WEB
+  codecs:
+    - CODEC_PROTO
+    - CODEC_JSON
+  compressions:
+    - COMPRESSION_IDENTITY
+    - COMPRESSION_GZIP
+  stream_types:
+    - STREAM_TYPE_UNARY
+    - STREAM_TYPE_CLIENT_STREAM
+    - STREAM_TYPE_SERVER_STREAM
+    - STREAM_TYPE_HALF_DUPLEX_BIDI_STREAM
+    - STREAM_TYPE_FULL_DUPLEX_BIDI_STREAM
+  supports_h2c: true
+  supports_tls: false
+  supports_tls_client_certs: false
+  supports_trailers: true
+  supports_half_duplex_bidi_over_http1: true
+  supports_connect_get: true
+  supports_message_receive_limit: true
