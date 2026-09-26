@@ -1,0 +1,27 @@
+name: Latest Lean
+
+# Builds and tests with the newest stable Lean every week, to learn early what
+# the next toolchain bump will need.
+on:
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test with the latest stable Lean
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Use the latest stable Lean
+        run: echo "leanprover/lean4:stable" > lean-toolchain
+      - uses: leanprover/lean-action@50fcf42d2e460296f1a34b402e990d1b24f8b596 # v1.6.0
+        with:
+          # A cache from last week's toolchain would not help.
+          use-github-cache: false

@@ -1,0 +1,78 @@
+name: Generated code
+
+# Regenerates the checked-in code from the .proto files and fails if anything
+# changes, when something it depends on changes.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "ConnectGen/**"
+      - "**.proto"
+      - "conformance/ConformanceGen/**"
+      - "conformance/generate.sh"
+      - "examples/eliza/ElizaGen/**"
+      - "examples/eliza/buf.*"
+      - "tests/EdgeGen/**"
+      - "tests/generate.sh"
+      - "scripts/build-protoc-gen-lean4.sh"
+      - "lake-manifest.json"
+      - "lean-toolchain"
+      - ".github/workflows/generated.yml"
+  pull_request:
+    paths:
+      - "ConnectGen/**"
+      - "**.proto"
+      - "conformance/ConformanceGen/**"
+      - "conformance/generate.sh"
+      - "examples/eliza/ElizaGen/**"
+      - "examples/eliza/buf.*"
+      - "tests/EdgeGen/**"
+      - "tests/generate.sh"
+      - "scripts/build-protoc-gen-lean4.sh"
+      - "lake-manifest.json"
+      - "lean-toolchain"
+      - ".github/workflows/generated.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Check generated code
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      # The versions the checked-in code was generated with.
+      PROTOC_VERSION: "35.1"
+      BUF_VERSION: "1.54.0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: leanprover/lean-action@50fcf42d2e460296f1a34b402e990d1b24f8b596 # v1.6.0
+        with:
+          test: false
+      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          version: ${{ env.PROTOC_VERSION }}
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: bufbuild/buf-action@fd21066df7214747548607aaa45548ba2b9bc1ff # v1
+        with:
+          setup_only: true
+          version: ${{ env.BUF_VERSION }}
+      - name: Build protoc-gen-lean4
+        run: ./scripts/build-protoc-gen-lean4.sh
+      - name: Regenerate
+        run: |
+          ./tests/generate.sh
+          PROTOC_GEN_LEAN4=.lake/tools/protoc-gen-lean4 ./conformance/generate.sh
+          (cd examples/eliza && buf generate)
+      - name: Check that nothing changed
+        run: |
+          git status --porcelain
+          test -z "$(git status --porcelain)"

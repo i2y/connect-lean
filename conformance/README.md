@@ -10,10 +10,10 @@ Programs for the [Connect conformance suite](https://github.com/connectrpc/confo
 * `config.yaml` — the features connect-lean claims.
 
 ```bash
-go install connectrpc.com/conformance/cmd/connectconformance@v1.0.5
+./scripts/download-conformance.sh      # the test runner, into .lake/tools
 lake build conformance-server conformance-client
-connectconformance --conf conformance/config.yaml --mode server -- .lake/build/bin/conformance-server
-connectconformance --conf conformance/config.yaml --mode client -- .lake/build/bin/conformance-client
+.lake/tools/connectconformance --conf conformance/config.yaml --mode server -- .lake/build/bin/conformance-server
+.lake/tools/connectconformance --conf conformance/config.yaml --mode client -- .lake/build/bin/conformance-client
 ```
 
 Expected: `1980 passed, 0 failed` (server) and `2647 passed, 0 failed` (client).
