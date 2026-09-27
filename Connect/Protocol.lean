@@ -189,12 +189,20 @@ private def hexValue? (c : Char) : Option Nat :=
   else if 'A' ≤ c ∧ c ≤ 'F' then some (c.toNat - 55)
   else none
 
-private def encodeWith (keep : UInt8 → Bool) (s : String) : String := Id.run do
-  let mut out := ""
-  for b in s.toUTF8 do
-    if keep b then out := out.push (Char.ofNat b.toNat)
-    else out := out.push '%' |>.push (hexDigit (b.toNat / 16)) |>.push (hexDigit (b.toNat % 16))
-  return out
+/-- Appends the bytes of `b` from `i` on: as themselves those `keep` accepts,
+    the others as `%` and two hex digits. -/
+private def encodeFrom (keep : UInt8 → Bool) (b : ByteArray) (i : Nat) (out : String) : String :=
+  if h : i < b.size then
+    let x := b[i]
+    let out :=
+      if keep x then out.push (Char.ofNat x.toNat)
+      else out.push '%' |>.push (hexDigit (x.toNat / 16)) |>.push (hexDigit (x.toNat % 16))
+    encodeFrom keep b (i + 1) out
+  else out
+termination_by b.size - i
+
+private def encodeWith (keep : UInt8 → Bool) (s : String) : String :=
+  encodeFrom keep s.toUTF8 0 ""
 
 /-- The `grpc-message` encoding: printable ASCII except `%` stays as is. -/
 def encodeGrpcMessage (s : String) : String :=
@@ -206,31 +214,134 @@ def encodeQuery (s : String) : String :=
     (b ≥ 0x41 && b ≤ 0x5a) || (b ≥ 0x61 && b ≤ 0x7a) || (b ≥ 0x30 && b ≤ 0x39) ||
     b == 0x2d || b == 0x2e || b == 0x5f || b == 0x7e) s
 
+/-- Decodes `cs` onto `out`. -/
+private def decodeChars (plusAsSpace : Bool) : List Char → ByteArray → ByteArray
+  | [], out => out
+  | '%' :: rest@(h :: l :: rest'), out =>
+    match hexValue? h, hexValue? l with
+    | some hi, some lo => decodeChars plusAsSpace rest' (out.push (hi * 16 + lo).toUInt8)
+    | _, _ => decodeChars plusAsSpace rest (out.push 0x25)
+  | c :: rest, out =>
+    decodeChars plusAsSpace rest
+      (if c == '+' && plusAsSpace then out.push 0x20 else out ++ c.toString.toUTF8)
+
 /-- Percent-decodes to bytes. Malformed escapes are kept literally, as gRPC
     asks of `grpc-message`. `plusAsSpace` applies form encoding. -/
-def decodeBytes (s : String) (plusAsSpace : Bool := false) : ByteArray := Id.run do
-  let cs := s.toList.toArray
-  let mut out := ByteArray.empty
-  let mut i := 0
-  while i < cs.size do
-    let c := cs[i]!
-    if c == '%' && i + 2 < cs.size then
-      match hexValue? cs[i + 1]!, hexValue? cs[i + 2]! with
-      | some hi, some lo =>
-        out := out.push (hi * 16 + lo).toUInt8
-        i := i + 3
-        continue
-      | _, _ => pure ()
-    if c == '+' && plusAsSpace then
-      out := out.push 0x20
-    else
-      out := out ++ c.toString.toUTF8
-    i := i + 1
-  return out
+def decodeBytes (s : String) (plusAsSpace : Bool := false) : ByteArray :=
+  decodeChars plusAsSpace s.toList .empty
 
 /-- Percent-decodes to a string, replacing invalid UTF-8 as a whole with the input. -/
 def decode (s : String) (plusAsSpace : Bool := false) : String :=
   (String.fromUTF8? (decodeBytes s plusAsSpace)).getD s
+
+/-! ### Decoding undoes encoding -/
+
+/-- The characters `encodeFrom` writes for a byte. -/
+private def encodeByte (keep : UInt8 → Bool) (x : UInt8) : List Char :=
+  if keep x then [Char.ofNat x.toNat]
+  else ['%', hexDigit (x.toNat / 16), hexDigit (x.toNat % 16)]
+
+/-- The byte at `i` of `b`, as a list. -/
+private theorem drop_toList (b : ByteArray) (i : Nat) (h : i < b.size) :
+    b.data.toList.drop i = b[i] :: b.data.toList.drop (i + 1) := by
+  rw [List.drop_eq_getElem_cons (by simpa using h)]
+  simp [ByteArray.getElem_eq_getElem_data]
+
+private theorem encodeFrom_toList (keep : UInt8 → Bool) (b : ByteArray) (i : Nat) (out : String) :
+    (encodeFrom keep b i out).toList =
+      out.toList ++ (b.data.toList.drop i).flatMap (encodeByte keep) := by
+  fun_induction encodeFrom keep b i out with
+  | case1 i out h x out' ih =>
+    rw [ih, drop_toList b i h, List.flatMap_cons, ← List.append_assoc]
+    congr 1
+    simp only [out', encodeByte, x]
+    split <;> simp
+  | case2 i out h =>
+    rw [List.drop_eq_nil_of_le (by simp; omega)]
+    simp
+
+private theorem hexValue?_hexDigit : ∀ n < 16, hexValue? (hexDigit n) = some n := by
+  decide +kernel
+
+/-- What decoding needs of the bytes an encoding keeps: they are ASCII, not `%`,
+    and not `+` when that means a space. -/
+private def Safe (keep : UInt8 → Bool) (plusAsSpace : Bool) : Prop :=
+  ∀ n < 256, keep n.toUInt8 = true → n < 128 ∧ n ≠ 0x25 ∧ (plusAsSpace = true → n ≠ 0x2b)
+
+/-- An ASCII character is its code point, and is one byte in UTF-8. -/
+private theorem ascii : ∀ n < 128, (Char.ofNat n).toNat = n ∧
+    String.utf8EncodeChar (Char.ofNat n) = [n.toUInt8] := by
+  decide +kernel
+
+private theorem decodeChars_encodeByte (keep : UInt8 → Bool) (p : Bool) (hsafe : Safe keep p)
+    (x : UInt8) (rest : List Char) (out : ByteArray) :
+    decodeChars p (encodeByte keep x ++ rest) out = decodeChars p rest (out.push x) := by
+  have hx := x.toNat_lt
+  unfold encodeByte
+  split
+  · rename_i hk
+    obtain ⟨hlt, hpct, hplus⟩ := hsafe x.toNat hx (by simpa using hk)
+    obtain ⟨hval, henc⟩ := ascii x.toNat hlt
+    have hc : Char.ofNat x.toNat ≠ '%' := fun h => hpct (by rw [← hval, h]; rfl)
+    have hsp : (Char.ofNat x.toNat == '+' && p) = false := by
+      cases p
+      · simp
+      · have : Char.ofNat x.toNat ≠ '+' := fun h => hplus rfl (by rw [← hval, h]; rfl)
+        simpa using this
+    rw [List.singleton_append, decodeChars.eq_3 _ _ _ _ (fun _ _ _ h _ => hc h), hsp]
+    congr 1
+    simp only [Bool.false_eq_true, ↓reduceIte]
+    apply ByteArray.ext
+    apply Array.ext'
+    simp [Char.toString_eq_singleton, String.toByteArray_singleton, List.utf8Encode_singleton, henc]
+  · have h₁ : x.toNat / 16 < 16 := by omega
+    have h₂ : x.toNat % 16 < 16 := Nat.mod_lt _ (by decide)
+    simp only [List.cons_append, decodeChars, hexValue?_hexDigit _ h₁, hexValue?_hexDigit _ h₂]
+    congr 2
+    rw [show x.toNat / 16 * 16 + x.toNat % 16 = x.toNat by omega]
+    simp
+
+private theorem decodeChars_encodeBytes (keep : UInt8 → Bool) (p : Bool) (hsafe : Safe keep p) :
+    ∀ (l : List UInt8) (out : ByteArray),
+    decodeChars p (l.flatMap (encodeByte keep)) out = l.foldl ByteArray.push out := by
+  intro l
+  induction l with
+  | nil => intro out; simp [decodeChars]
+  | cons x l ih =>
+    intro out
+    rw [List.flatMap_cons, decodeChars_encodeByte keep p hsafe, ih]
+    rfl
+
+private theorem data_foldl_push (l : List UInt8) :
+    ∀ out : ByteArray, (l.foldl ByteArray.push out).data.toList = out.data.toList ++ l := by
+  induction l with
+  | nil => intro out; simp
+  | cons x l ih => intro out; simp [ih, ByteArray.data_push]
+
+private theorem decode_encodeWith (keep : UInt8 → Bool) (p : Bool) (hsafe : Safe keep p)
+    (s : String) : decode (encodeWith keep s) p = s := by
+  have hbytes : decodeBytes (encodeWith keep s) p = s.toUTF8 := by
+    unfold decodeBytes encodeWith
+    rw [encodeFrom_toList, String.toList_empty, List.nil_append, List.drop_zero,
+      decodeChars_encodeBytes keep p hsafe]
+    apply ByteArray.ext
+    apply Array.ext'
+    rw [data_foldl_push]
+    rfl
+  have hutf8 : String.fromUTF8? s.toUTF8 = some s := by
+    simp only [String.fromUTF8?, String.toUTF8_eq_toByteArray, dite_eq_left s.isValidUTF8]
+    rfl
+  simp only [decode, hbytes, hutf8, Option.getD_some]
+
+/-- Decoding gives back what `encodeGrpcMessage` wrote. -/
+theorem decode_encodeGrpcMessage (s : String) : decode (encodeGrpcMessage s) = s :=
+  decode_encodeWith _ false (by unfold Safe; decide +kernel) s
+
+/-- Decoding gives back what `encodeQuery` wrote, whether or not `+` means a
+    space. -/
+theorem decode_encodeQuery (s : String) (plusAsSpace : Bool) :
+    decode (encodeQuery s) plusAsSpace = s :=
+  decode_encodeWith _ plusAsSpace (by cases plusAsSpace <;> (unfold Safe; decide +kernel)) s
 
 end Percent
 

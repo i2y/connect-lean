@@ -25,7 +25,10 @@ The first release.
   call.
 - `protoc-gen-connect-lean`, which generates a structure of handlers and a
   typed client for each service.
-- Theorems for envelope and HTTP/2 frame round trips.
+- Theorems (listed in the README): decoding gives back what was encoded, for
+  envelopes, HTTP/2 frames, HPACK integers, Huffman codes and strings, base64
+  and percent-encoding; and untrusted input cannot make the parsers use more
+  than configured.
 - The Connect conformance suite v1.0.5 passes: all 1,980 server cases and all
   2,647 client cases in `conformance/config.yaml`.
 

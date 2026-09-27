@@ -41,6 +41,52 @@ info: 'Connect.Http2.Frame.parseAt?_encode' depends on axioms: [propext, Classic
 #guard_msgs in
 #print axioms Connect.Codec.ofName?_name
 
+/-- info: 'Connect.Http2.Hpack.decodeInt_encodeInt' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms Connect.Http2.Hpack.decodeInt_encodeInt
+
+/--
+info: 'Connect.Http2.Hpack.huffmanDecode_huffmanEncode' depends on axioms: [propext, Classical.choice, Quot.sound]
+-/
+#guard_msgs in
+#print axioms Connect.Http2.Hpack.huffmanDecode_huffmanEncode
+
+/--
+info: 'Connect.Http2.Hpack.size_huffmanEncode' depends on axioms: [propext, Classical.choice, Quot.sound]
+-/
+#guard_msgs in
+#print axioms Connect.Http2.Hpack.size_huffmanEncode
+
+/--
+info: 'Connect.Http2.Hpack.decodeString_encodeString' depends on axioms: [propext, Classical.choice, Quot.sound]
+-/
+#guard_msgs in
+#print axioms Connect.Http2.Hpack.decodeString_encodeString
+
+/--
+info: 'Connect.Base64.decode?_encode' depends on axioms: [propext, Classical.choice, Quot.sound]
+-/
+#guard_msgs in
+#print axioms Connect.Base64.decode?_encode
+
+/--
+info: 'Connect.Base64.decode?_encodeUrl' depends on axioms: [propext, Classical.choice, Quot.sound]
+-/
+#guard_msgs in
+#print axioms Connect.Base64.decode?_encodeUrl
+
+/--
+info: 'Connect.Percent.decode_encodeGrpcMessage' depends on axioms: [propext, Classical.choice, Quot.sound]
+-/
+#guard_msgs in
+#print axioms Connect.Percent.decode_encodeGrpcMessage
+
+/--
+info: 'Connect.Percent.decode_encodeQuery' depends on axioms: [propext, Classical.choice, Quot.sound]
+-/
+#guard_msgs in
+#print axioms Connect.Percent.decode_encodeQuery
+
 /-! Bounds on what untrusted input can make the parsers do. -/
 
 /--
