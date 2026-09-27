@@ -183,6 +183,29 @@ def nextLength? (r : EnvelopeReader) : Option Nat :=
 /-- Bytes received but not yet returned as an envelope. -/
 def pending (r : EnvelopeReader) : Nat := r.buffer.size - r.offset
 
+/-- The length `nextLength?` announces is the size of the payload `next?`
+    returns, so a limit checked on the first holds for the second. -/
+theorem nextLength?_of_next? {r : EnvelopeReader} {e : Envelope} {r' : EnvelopeReader}
+    (h : r.next? = some (e, r')) : r.nextLength? = some e.payload.size := by
+  simp only [next?] at h
+  split at h
+  · rename_i e' off hparse
+    simp only [Option.some.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, -⟩ := h
+    simp only [Envelope.parseAt?] at hparse
+    split at hparse
+    · rename_i h5
+      split at hparse
+      · rename_i hfit
+        simp only [Option.some.injEq, Prod.mk.injEq] at hparse
+        obtain ⟨rfl, -⟩ := hparse
+        simp only [nextLength?, Envelope.peekLength?, h5, ↓reduceDIte, ByteArray.size_extract,
+          Option.some.injEq]
+        omega
+      · simp at hparse
+    · simp at hparse
+  · simp at h
+
 end EnvelopeReader
 
 end Connect

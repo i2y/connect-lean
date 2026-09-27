@@ -125,6 +125,23 @@ def hasFlag (f : Frame) (flag : UInt8) : Bool := (f.flags &&& flag) != 0
 
 @[simp] theorem size_header (f : Frame) : f.header.size = 9 := rfl
 
+/-- A parsed frame is never longer than `maxSize`. -/
+theorem parseAt?_size_le {b : ByteArray} {off maxSize : Nat} {f : Frame} {next : Nat}
+    (h : parseAt? b off maxSize = .ok (some (f, next))) : f.payload.size ≤ maxSize := by
+  unfold parseAt? at h
+  split at h
+  · dsimp only at h
+    split at h
+    · simp at h
+    · rename_i hle
+      split at h
+      · simp only [Except.ok.injEq, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, -⟩ := h
+        simp only [ByteArray.size_extract]
+        omega
+      · simp at h
+  · simp at h
+
 private theorem getElem_mid {pre mid rest : ByteArray} {i : Nat} (hi : i < mid.size)
     (h : pre.size + i < (pre ++ mid ++ rest).size) :
     (pre ++ mid ++ rest)[pre.size + i] = mid[i] := by
@@ -218,6 +235,21 @@ def next? (r : FrameReader) (maxSize : Nat) : Except UInt32 (Option (Frame × Fr
   match ← Frame.parseAt? r.buffer r.offset maxSize with
   | some (frame, off) => return some (frame, { r with offset := off })
   | none => return none
+
+/-- A frame the reader returns is never longer than `maxSize`: a longer one is
+    refused before its payload is buffered. -/
+theorem next?_size_le {r : FrameReader} {maxSize : Nat} {f : Frame} {r' : FrameReader}
+    (h : r.next? maxSize = .ok (some (f, r'))) : f.payload.size ≤ maxSize := by
+  simp only [next?, bind, Except.bind, pure, Except.pure] at h
+  split at h
+  · simp at h
+  · rename_i res hparse
+    split at h
+    · rename_i f' off
+      simp only [Except.ok.injEq, Option.some.injEq, Prod.mk.injEq] at h
+      obtain ⟨rfl, -⟩ := h
+      exact Frame.parseAt?_size_le hparse
+    · simp at h
 
 end FrameReader
 

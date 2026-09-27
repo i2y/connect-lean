@@ -161,31 +161,49 @@ private def Huffman.build (lengths : Array Nat) : Huffman × Int := Id.run do
 private def fixedLitCode : Huffman := (Huffman.build fixedLitLengths).1
 private def fixedDistCode : Huffman := (Huffman.build (Array.replicate 30 5)).1
 
-/-- Decodes the literal/length and distance symbols of one block. -/
-private partial def inflateCodes (lit dist : Huffman) (br : BitReader) (out : ByteArray)
-    (limit : Nat) : DecodeM (BitReader × ByteArray) := do
-  let (sym, br) ← lit.decode br
-  if sym < 256 then
-    if out.size ≥ limit then throw .limitExceeded
-    inflateCodes lit dist br (out.push sym.toUInt8) limit
-  else if sym == 256 then
-    return (br, out)
-  else
-    let sym := sym - 257
-    if sym ≥ 29 then throw (.invalid "invalid length symbol")
-    let (extra, br) ← br.bits lengthExtra[sym]!
-    let len := lengthBase[sym]! + extra
-    let (dsym, br) ← dist.decode br
-    if dsym ≥ 30 then throw (.invalid "invalid distance symbol")
-    let (dextra, br) ← br.bits distExtra[dsym]!
-    let d := distBase[dsym]! + dextra
-    if d > out.size then throw (.invalid "distance too far back")
-    if out.size + len > limit then throw .limitExceeded
-    let mut out := out
-    let start := out.size - d
-    for i in [0:len] do
-      out := out.push out[start + i]!
-    inflateCodes lit dist br out limit
+/-- Output that holds at most `limit` bytes. Everything that adds to it checks
+    first, so the type records that no step of decompression ever holds more. -/
+private abbrev Out (limit : Nat) := { out : ByteArray // out.size ≤ limit }
+
+/-- Appends `n` bytes copied from `start` on (the copy may read bytes it has
+    just appended). -/
+private def copyBack (out : ByteArray) (start : Nat) : (n : Nat) → ByteArray
+  | 0 => out
+  | n + 1 => copyBack (out.push out[start]!) (start + 1) n
+
+private theorem size_copyBack (out : ByteArray) (start n : Nat) :
+    (copyBack out start n).size = out.size + n := by
+  induction n generalizing out start with
+  | zero => simp [copyBack]
+  | succ n ih => simp only [copyBack, ih, ByteArray.size_push]; omega
+
+/-- Decodes the literal/length and distance symbols of one block. Every symbol
+    but the last adds at least a byte, so `fuel` of `limit - out.size + 1` is
+    never exhausted before the limit is. -/
+private def inflateCodes (lit dist : Huffman) (limit : Nat) :
+    (fuel : Nat) → BitReader → Out limit → DecodeM (BitReader × Out limit)
+  | 0, _, _ => throw .limitExceeded
+  | fuel + 1, br, out => do
+    let (sym, br) ← lit.decode br
+    if sym < 256 then
+      if h : out.val.size ≥ limit then throw .limitExceeded
+      else inflateCodes lit dist limit fuel br ⟨out.val.push sym.toUInt8, by simp; omega⟩
+    else if sym == 256 then
+      return (br, out)
+    else
+      let sym := sym - 257
+      if sym ≥ 29 then throw (.invalid "invalid length symbol")
+      let (extra, br) ← br.bits lengthExtra[sym]!
+      let len := lengthBase[sym]! + extra
+      let (dsym, br) ← dist.decode br
+      if dsym ≥ 30 then throw (.invalid "invalid distance symbol")
+      let (dextra, br) ← br.bits distExtra[dsym]!
+      let d := distBase[dsym]! + dextra
+      if d > out.val.size then throw (.invalid "distance too far back")
+      if h : out.val.size + len > limit then throw .limitExceeded
+      else
+        inflateCodes lit dist limit fuel br
+          ⟨copyBack out.val (out.val.size - d) len, by rw [size_copyBack]; omega⟩
 
 /-- The order in which code-length code lengths are sent. -/
 private def codeLengthOrder : Array Nat :=
@@ -241,9 +259,16 @@ private def readDynamicCodes (br : BitReader) : DecodeM (Huffman × Huffman × B
     throw (.invalid "bad distance code")
   return (lit, dist, br)
 
+private theorem size_copySlice (src dest : ByteArray) (srcOff len : Nat)
+    (h : srcOff + len ≤ src.size) :
+    (src.copySlice srcOff dest dest.size len).size = dest.size + len := by
+  simp only [ByteArray.copySlice, ByteArray.size, Array.size_append, Array.size_extract]
+  simp only [ByteArray.size] at h
+  omega
+
 /-- Copies a stored block. -/
-private def inflateStored (br : BitReader) (out : ByteArray) (limit : Nat) :
-    DecodeM (BitReader × ByteArray) := do
+private def inflateStored (limit : Nat) (br : BitReader) (out : Out limit) :
+    DecodeM (BitReader × Out limit) := do
   let br := br.alignToByte
   let input := br.input
   let p := br.pos
@@ -251,28 +276,59 @@ private def inflateStored (br : BitReader) (out : ByteArray) (limit : Nat) :
   let len := input[p]!.toNat ||| (input[p + 1]!.toNat <<< 8)
   let nlen := input[p + 2]!.toNat ||| (input[p + 3]!.toNat <<< 8)
   if len != (nlen ^^^ 0xffff) then throw (.invalid "stored block length mismatch")
-  if p + 4 + len > input.size then throw (.invalid "unexpected end of compressed data")
-  if out.size + len > limit then throw .limitExceeded
-  let out := input.copySlice (p + 4) out out.size len
-  return ({ br with pos := p + 4 + len }, out)
+  if hin : p + 4 + len > input.size then throw (.invalid "unexpected end of compressed data")
+  else if h : out.val.size + len > limit then throw .limitExceeded
+  else
+    let copied := input.copySlice (p + 4) out.val out.val.size len
+    return ({ br with pos := p + 4 + len },
+      ⟨copied, by rw [size_copySlice _ _ _ _ (by omega)]; omega⟩)
 
-/-- Inflates the DEFLATE stream starting at byte `start`. Returns the output and
-    the byte offset just past the stream. -/
-partial def inflate (input : ByteArray) (start : Nat := 0) (limit : Nat := 2 ^ 62)
-    (out : ByteArray := .empty) : Except Error (ByteArray × Nat) := do
-  let rec loop (br : BitReader) (out : ByteArray) : DecodeM (BitReader × ByteArray) := do
+/-- Inflates blocks up to the final one. Every block takes at least three bits
+    of input, so `fuel` of eight per input byte is never exhausted. -/
+private def inflateBlocks (limit : Nat) :
+    (fuel : Nat) → BitReader → Out limit → DecodeM (BitReader × Out limit)
+  | 0, _, _ => throw (.invalid "too many blocks")
+  | fuel + 1, br, out => do
     let (final, br) ← br.bits 1
     let (type, br) ← br.bits 2
     let (br, out) ← match type with
-      | 0 => inflateStored br out limit
-      | 1 => inflateCodes fixedLitCode fixedDistCode br out limit
+      | 0 => inflateStored limit br out
+      | 1 => inflateCodes fixedLitCode fixedDistCode limit (limit - out.val.size + 1) br out
       | 2 => do
         let (lit, dist, br) ← readDynamicCodes br
-        inflateCodes lit dist br out limit
+        inflateCodes lit dist limit (limit - out.val.size + 1) br out
       | _ => throw (.invalid "invalid block type")
-    if final == 1 then return (br, out) else loop br out
-  let (br, out) ← loop { input, pos := start, buf := 0, cnt := 0 } out
+    if final == 1 then return (br, out) else inflateBlocks limit fuel br out
+
+/-- Inflates the DEFLATE stream starting at byte `start` after `out`, into at
+    most `limit` bytes in all: the output and the byte offset past the stream. -/
+private def inflateBounded (input : ByteArray) (start limit : Nat) (out : Out limit) :
+    DecodeM (Out limit × Nat) := do
+  let (br, out) ← inflateBlocks limit (input.size * 8 + 1)
+    { input, pos := start, buf := 0, cnt := 0 } out
   return (out, br.alignToByte.pos)
+
+/-- Inflates the DEFLATE stream starting at byte `start`. Returns the output and
+    the byte offset just past the stream. -/
+def inflate (input : ByteArray) (start : Nat := 0) (limit : Nat := 2 ^ 62)
+    (out : ByteArray := .empty) : Except Error (ByteArray × Nat) :=
+  if h : out.size ≤ limit then
+    (fun (out, e) => (out.val, e)) <$> inflateBounded input start limit ⟨out, h⟩
+  else .error .limitExceeded
+
+/-- Inflating never produces more than `limit` bytes. -/
+theorem inflate_size_le {input : ByteArray} {start limit : Nat} {out res : ByteArray} {e : Nat}
+    (h : inflate input start limit out = .ok (res, e)) : res.size ≤ limit := by
+  simp only [inflate] at h
+  split at h
+  · simp only [Functor.map, Except.map] at h
+    split at h
+    · simp at h
+    · rename_i v _
+      simp only [Except.ok.injEq, Prod.mk.injEq] at h
+      obtain ⟨rfl, -⟩ := h
+      exact v.1.2
+  · simp at h
 
 /-! ## Compression -/
 
@@ -427,10 +483,13 @@ private def skipZeroTerminated (b : ByteArray) (i : Nat) : Except Error Nat := d
   if j ≥ b.size then throw (.invalid "truncated header")
   return j + 1
 
-/-- Decompresses gzip data, including concatenated members. Fails if the output
-    would be larger than `limit` bytes. -/
-partial def decompress (data : ByteArray) (limit : Nat := 2 ^ 62) : Except Error ByteArray := do
-  let rec «member» (start : Nat) (out : ByteArray) : Except Error ByteArray := do
+/-- Decompresses the gzip members from `start` on, after `out`. Every member
+    takes at least eighteen bytes, so `fuel` of one per byte is never
+    exhausted. -/
+private def members (data : ByteArray) (limit : Nat) :
+    (fuel : Nat) → (start : Nat) → Out limit → Except Error (Out limit)
+  | 0, _, _ => throw (.invalid "too many members")
+  | fuel + 1, start, out => do
     let b := data
     if start + 10 > b.size then throw (.invalid "truncated header")
     if b[start]! != 0x1f || b[start + 1]! != 0x8b then throw (.invalid "not gzip data")
@@ -447,17 +506,33 @@ partial def decompress (data : ByteArray) (limit : Nat := 2 ^ 62) : Except Error
     if i > b.size then throw (.invalid "truncated header")
     -- Each member is inflated on its own: back-references cannot reach into
     -- the previous member's output.
-    if out.size > limit then throw .limitExceeded
-    let (produced, «end») ← inflate b i (limit - out.size) .empty
+    let (produced, «end») ← inflateBounded b i (limit - out.val.size) ⟨.empty, Nat.zero_le _⟩
     if «end» + 8 > b.size then throw (.invalid "truncated trailer")
-    if getLE32 b «end» != crc32 produced then throw (.invalid "CRC mismatch")
-    if getLE32 b («end» + 4) != produced.size.toUInt32 then throw (.invalid "size mismatch")
-    let out := out ++ produced
+    if getLE32 b «end» != crc32 produced.val then throw (.invalid "CRC mismatch")
+    if getLE32 b («end» + 4) != produced.val.size.toUInt32 then throw (.invalid "size mismatch")
+    let out : Out limit := ⟨out.val ++ produced.val, by
+      have := out.2; have := produced.2; simp only [ByteArray.size_append]; omega⟩
     let next := «end» + 8
     if next + 2 ≤ b.size && b[next]! == 0x1f && b[next + 1]! == 0x8b then
-      «member» next out
+      members data limit fuel next out
     else
       return out
-  «member» 0 .empty
+
+/-- Decompresses gzip data, including concatenated members. Fails if the output
+    would be larger than `limit` bytes. -/
+def decompress (data : ByteArray) (limit : Nat := 2 ^ 62) : Except Error ByteArray :=
+  (·.val) <$> members data limit (data.size + 1) 0 ⟨.empty, Nat.zero_le _⟩
+
+/-- Decompression never produces more than `limit` bytes, however the input
+    was made. (The output type of each step says the same of every buffer on
+    the way.) -/
+theorem decompress_size_le {data : ByteArray} {limit : Nat} {out : ByteArray}
+    (h : decompress data limit = .ok out) : out.size ≤ limit := by
+  simp only [decompress, Functor.map, Except.map] at h
+  split at h
+  · simp at h
+  · rename_i v _
+    simp only [Except.ok.injEq] at h
+    exact h ▸ v.2
 
 end Connect.Gzip

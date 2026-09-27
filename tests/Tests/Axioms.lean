@@ -3,6 +3,8 @@ import Connect
 /-! The theorems README.md lists rest on Lean's standard axioms at most: no
 `sorry`, no `native_decide`. -/
 
+/-! Round trips. -/
+
 /--
 info: 'Connect.Envelope.parseAt?_encode' depends on axioms: [propext, Classical.choice, Quot.sound]
 -/
@@ -38,3 +40,57 @@ info: 'Connect.Http2.Frame.parseAt?_encode' depends on axioms: [propext, Classic
 /-- info: 'Connect.Codec.ofName?_name' does not depend on any axioms -/
 #guard_msgs in
 #print axioms Connect.Codec.ofName?_name
+
+/-! Bounds on what untrusted input can make the parsers do. -/
+
+/--
+info: 'Connect.Http2.Hpack.decodeInt_spec' depends on axioms: [propext, Classical.choice, Quot.sound]
+-/
+#guard_msgs in
+#print axioms Connect.Http2.Hpack.decodeInt_spec
+
+/--
+info: 'Connect.Http2.Hpack.decodeString_spec' depends on axioms: [propext, Classical.choice, Quot.sound]
+-/
+#guard_msgs in
+#print axioms Connect.Http2.Hpack.decodeString_spec
+
+/--
+info: 'Connect.Http2.Hpack.Decoder.decode_valid' depends on axioms: [propext, Classical.choice, Quot.sound]
+-/
+#guard_msgs in
+#print axioms Connect.Http2.Hpack.Decoder.decode_valid
+
+/--
+info: 'Connect.Http2.Hpack.Decoder.decode_listSize' depends on axioms: [propext, Classical.choice, Quot.sound]
+-/
+#guard_msgs in
+#print axioms Connect.Http2.Hpack.Decoder.decode_listSize
+
+/-- info: 'Connect.Http2.Hpack.Decoder.valid_mk' does not depend on any axioms -/
+#guard_msgs in
+#print axioms Connect.Http2.Hpack.Decoder.valid_mk
+
+/-- info: 'Connect.Http2.Frame.parseAt?_size_le' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms Connect.Http2.Frame.parseAt?_size_le
+
+/-- info: 'Connect.Http2.FrameReader.next?_size_le' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms Connect.Http2.FrameReader.next?_size_le
+
+/-- info: 'Connect.EnvelopeReader.nextLength?_of_next?' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms Connect.EnvelopeReader.nextLength?_of_next?
+
+/--
+info: 'Connect.Gzip.inflate_size_le' depends on axioms: [propext, Classical.choice, Quot.sound]
+-/
+#guard_msgs in
+#print axioms Connect.Gzip.inflate_size_le
+
+/--
+info: 'Connect.Gzip.decompress_size_le' depends on axioms: [propext, Classical.choice, Quot.sound]
+-/
+#guard_msgs in
+#print axioms Connect.Gzip.decompress_size_le

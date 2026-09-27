@@ -62,7 +62,18 @@ def tests : List Test := [
   ("invalid input is rejected", do
     expectError (Hpack.Decoder.decode {} ⟨#[0x80]⟩) "index 0"
     expectError (Hpack.Decoder.decode {} ⟨#[0xff, 0x7f]⟩) "index out of range"
-    expectError (Hpack.huffmanDecode ⟨#[0x00]⟩) "padding")
+    expectError (Hpack.huffmanDecode ⟨#[0x00]⟩) "padding"
+    -- EOS (thirty one-bits) may not appear in a string (RFC 7541 §5.2).
+    expectError (Hpack.huffmanDecode ⟨#[0xff, 0xff, 0xff, 0xff]⟩) "EOS"
+    -- At most five continuation bytes.
+    expectError (Hpack.decodeInt ⟨#[0xff, 0x80, 0x80, 0x80, 0x80, 0x80, 0x00]⟩ 0 7) "long integer"
+    -- A table size update after a field, with entries in the table (§4.2).
+    expectError (Hpack.Decoder.decode {} ⟨#[0x40, 0x01, 0x61, 0x01, 0x62, 0x20]⟩) "late size update"),
+  ("a table size update at the start of a block is accepted", do
+    let (hs, d) ← expectOk (Hpack.Decoder.decode {} ⟨#[0x20, 0x40, 0x01, 0x61, 0x01, 0x62]⟩)
+    expectEq hs #[("a", "b")]
+    expectEq d.maxSize 0
+    expectEq d.entries #[])
 ]
 
 private def frames (bytes : ByteArray) (chunk : Nat) : IO (Array Frame) := do
