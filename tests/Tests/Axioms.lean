@@ -140,3 +140,89 @@ info: 'Connect.Gzip.decompress_size_le' depends on axioms: [propext, Classical.c
 -/
 #guard_msgs in
 #print axioms Connect.Gzip.decompress_size_le
+
+/-! Readers: how the bytes are split does not matter. -/
+
+/--
+info: 'Connect.Envelope.parseAt?_append' depends on axioms: [propext, Classical.choice, Quot.sound]
+-/
+#guard_msgs in
+#print axioms Connect.Envelope.parseAt?_append
+
+/--
+info: 'Connect.EnvelopeReader.unread_feed' depends on axioms: [propext, Classical.choice, Quot.sound]
+-/
+#guard_msgs in
+#print axioms Connect.EnvelopeReader.unread_feed
+
+/--
+info: 'Connect.EnvelopeReader.next?_eq' depends on axioms: [propext, Classical.choice, Quot.sound]
+-/
+#guard_msgs in
+#print axioms Connect.EnvelopeReader.next?_eq
+
+/--
+info: 'Connect.EnvelopeReader.next?_feed' depends on axioms: [propext, Classical.choice, Quot.sound]
+-/
+#guard_msgs in
+#print axioms Connect.EnvelopeReader.next?_feed
+
+/--
+info: 'Connect.EnvelopeReader.drain_congr' depends on axioms: [propext, Classical.choice, Quot.sound]
+-/
+#guard_msgs in
+#print axioms Connect.EnvelopeReader.drain_congr
+
+/--
+info: 'Connect.EnvelopeReader.drain_feed' depends on axioms: [propext, Classical.choice, Quot.sound]
+-/
+#guard_msgs in
+#print axioms Connect.EnvelopeReader.drain_feed
+
+/--
+info: 'Connect.Http2.Frame.parseAt?_append' depends on axioms: [propext, Classical.choice, Quot.sound]
+-/
+#guard_msgs in
+#print axioms Connect.Http2.Frame.parseAt?_append
+
+/--
+info: 'Connect.Http2.FrameReader.unread_feed' depends on axioms: [propext, Classical.choice, Quot.sound]
+-/
+#guard_msgs in
+#print axioms Connect.Http2.FrameReader.unread_feed
+
+/--
+info: 'Connect.Http2.FrameReader.next?_eq' depends on axioms: [propext, Classical.choice, Quot.sound]
+-/
+#guard_msgs in
+#print axioms Connect.Http2.FrameReader.next?_eq
+
+/--
+info: 'Connect.Http2.FrameReader.next?_feed' depends on axioms: [propext, Classical.choice, Quot.sound]
+-/
+#guard_msgs in
+#print axioms Connect.Http2.FrameReader.next?_feed
+
+/--
+info: 'Connect.Http2.FrameReader.next?_feed_error' depends on axioms: [propext, Classical.choice, Quot.sound]
+-/
+#guard_msgs in
+#print axioms Connect.Http2.FrameReader.next?_feed_error
+
+/--
+info: 'Connect.Http2.FrameReader.drain_congr' depends on axioms: [propext, Classical.choice, Quot.sound]
+-/
+#guard_msgs in
+#print axioms Connect.Http2.FrameReader.drain_congr
+
+/--
+info: 'Connect.Http2.FrameReader.drain_feed' depends on axioms: [propext, Classical.choice, Quot.sound]
+-/
+#guard_msgs in
+#print axioms Connect.Http2.FrameReader.drain_feed
+
+/--
+info: 'Connect.Http2.FrameReader.drain_feed_error' depends on axioms: [propext, Classical.choice, Quot.sound]
+-/
+#guard_msgs in
+#print axioms Connect.Http2.FrameReader.drain_feed_error

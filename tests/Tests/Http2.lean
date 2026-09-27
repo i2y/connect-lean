@@ -110,6 +110,35 @@ def frameTests : List Test := [
     match FrameReader.empty.feed big.encode |>.next? 16384 with
     | .error code => expectEq code ErrorCode.frameSizeError
     | _ => throw (IO.userError "expected FRAME_SIZE_ERROR")),
+  ("draining after each chunk returns what draining once does", do
+    let fs : Array Frame := #[dataFrame 1 "hello".toUTF8 false, settingsAck,
+      pingFrame ⟨#[1, 2, 3, 4, 5, 6, 7, 8]⟩ false,
+      dataFrame 3 (ByteArray.mk (Array.replicate 20000 0)) false, dataFrame 5 .empty true]
+    let wire := fs.foldl (fun acc f => acc ++ f.encode) ByteArray.empty
+    let (whole, last) := (FrameReader.empty.feed wire).drain 16384
+    expectEq whole.length 3 "frames before the oversized one"
+    expect (match last with | .error code => code == ErrorCode.frameSizeError | .ok _ => false)
+      "the oversized frame is refused"
+    for step in [1, 2, 9, 100, 4096] do
+      let mut r := FrameReader.empty
+      let mut got : List Frame := []
+      let mut refused := false
+      let mut i := 0
+      while i < wire.size && !refused do
+        let (more, next) := (r.feed (wire.extract i (i + step))).drain 16384
+        got := got ++ more
+        match next with
+        | .ok r' => r := r'
+        | .error code =>
+          expectEq code ErrorCode.frameSizeError
+          refused := true
+        i := i + step
+      expect refused s!"chunks of {step}: refused"
+      expectEq got.length whole.length s!"chunks of {step}"
+      for (a, b) in got.zip whole do
+        expectEq a.type b.type
+        expectEq a.streamId b.streamId
+        expectEq a.payload b.payload),
   ("header blocks split into CONTINUATION frames", do
     let block := ByteArray.mk ((Array.range 40000).map (·.toUInt8))
     let fs := headerFrames 9 block true 16384

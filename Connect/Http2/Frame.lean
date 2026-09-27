@@ -214,6 +214,74 @@ theorem parseAt?_encode (pre rest : ByteArray) (f : Frame) (maxSize : Nat)
     exact ByteArray.extract_append_eq_left rfl
   simp only [hidEq, htype, hflags, hpayload]
 
+/-! ### Parsing and the bytes around a frame -/
+
+/-- A parsed frame ends within the buffer, at least nine bytes on. -/
+theorem le_size_of_parseAt? {b : ByteArray} {off maxSize : Nat} {f : Frame} {n : Nat}
+    (h : parseAt? b off maxSize = .ok (some (f, n))) : off + 9 ≤ n ∧ n ≤ b.size := by
+  unfold parseAt? at h
+  split at h
+  · dsimp only at h
+    split at h
+    · simp at h
+    · split at h
+      · simp only [Except.ok.injEq, Option.some.injEq, Prod.mk.injEq] at h
+        omega
+      · simp at h
+  · simp at h
+
+/-- Parsing at `off` is parsing the bytes from `off` on. -/
+theorem parseAt?_extract (b : ByteArray) (off maxSize : Nat) :
+    parseAt? b off maxSize =
+      (parseAt? (b.extract off b.size) 0 maxSize).map (Option.map fun (f, n) => (f, off + n)) := by
+  unfold parseAt?
+  by_cases h9 : off + 9 ≤ b.size
+  · have h9' : 0 + 9 ≤ (b.extract off b.size).size := by simp; omega
+    rw [dite_eq_left h9, dite_eq_left h9']
+    simp only [ByteArray.getElem_extract, Nat.add_zero, Nat.zero_add, ByteArray.size_extract,
+      Nat.min_self]
+    split
+    · rfl
+    · split
+      · rename_i hfit
+        rw [ite_eq_left (by omega)]
+        simp only [Except.map, Option.map_some, ByteArray.extract_extract, Except.ok.injEq,
+          Option.some.injEq, Prod.mk.injEq, Frame.mk.injEq, true_and]
+        constructor
+        · congr 1 <;> omega
+        · omega
+      · rw [ite_eq_right (by omega)]
+        rfl
+  · rw [dite_eq_right h9, dite_eq_right (by simp; omega)]
+    rfl
+
+/-- Bytes after a frame change neither the frame nor the refusal of an
+    oversized one. -/
+theorem parseAt?_append {b : ByteArray} {off maxSize : Nat} (more : ByteArray)
+    (h : parseAt? b off maxSize ≠ .ok none) :
+    parseAt? (b ++ more) off maxSize = parseAt? b off maxSize := by
+  unfold parseAt? at h ⊢
+  by_cases h9 : off + 9 ≤ b.size
+  · have h9' : off + 9 ≤ (b ++ more).size := by simp [ByteArray.size_append]; omega
+    rw [dite_eq_left h9', dite_eq_left h9]
+    rw [dite_eq_left h9] at h
+    simp (disch := omega) only [ByteArray.getElem_append_left]
+    by_cases hmax : b[off].toNat * 2 ^ 16 + b[off + 1].toNat * 2 ^ 8 + b[off + 2].toNat > maxSize
+    · simp only [hmax, ↓reduceIte]
+    · simp only [hmax, ↓reduceIte] at h ⊢
+      by_cases hfit : off + 9 + (b[off].toNat * 2 ^ 16 + b[off + 1].toNat * 2 ^ 8 +
+          b[off + 2].toNat) ≤ b.size
+      · have hfit' : off + 9 + (b[off].toNat * 2 ^ 16 + b[off + 1].toNat * 2 ^ 8 +
+            b[off + 2].toNat) ≤ (b ++ more).size := by simp [ByteArray.size_append]; omega
+        simp only [hfit, hfit', ↓reduceIte]
+        congr 4
+        rw [ByteArray.extract_append, (ByteArray.extract_eq_empty_iff (b := more)).2 (by omega),
+          ByteArray.append_empty]
+      · simp only [hfit, ↓reduceIte] at h
+        exact absurd rfl h
+  · rw [dite_eq_right h9] at h
+    exact absurd rfl h
+
 end Frame
 
 /-- Reassembles frames from bytes arriving in arbitrary pieces. -/
@@ -250,6 +318,267 @@ theorem next?_size_le {r : FrameReader} {maxSize : Nat} {f : Frame} {r' : FrameR
       obtain ⟨rfl, -⟩ := h
       exact Frame.parseAt?_size_le hparse
     · simp at h
+
+/-! ### How the bytes are split does not matter
+
+As for envelopes (see `EnvelopeReader`): feeding appends to the unread bytes,
+`next?` parses them and nothing else, and neither a frame that has arrived nor
+the refusal of an oversized one is changed by the bytes after it. So the frames
+a reader returns, and whether it refuses one, depend only on the bytes that
+arrived (`drain_feed`, `drain_feed_error`). -/
+
+/-- The bytes received but not yet returned as frames. -/
+def unread (r : FrameReader) : ByteArray := r.buffer.extract r.offset r.buffer.size
+
+@[simp] theorem unread_empty : empty.unread = .empty := by
+  simp only [unread, empty]
+  exact ByteArray.extract_zero_size
+
+/-- Feeding appends to the unread bytes. -/
+theorem unread_feed (r : FrameReader) (bytes : ByteArray) :
+    (r.feed bytes).unread = r.unread ++ bytes := by
+  unfold feed unread
+  split
+  · rename_i h
+    simp only [beq_iff_eq] at h
+    dsimp only
+    rw [h, ByteArray.extract_zero_size, ByteArray.extract_zero_size]
+  · dsimp only
+    rw [ByteArray.extract_zero_size]
+
+private theorem next?_def (r : FrameReader) (maxSize : Nat) :
+    r.next? maxSize = (Frame.parseAt? r.buffer r.offset maxSize).map
+      (Option.map fun (f, off) => (f, { r with offset := off })) := by
+  simp only [next?, bind, Except.bind, pure, Except.pure]
+  cases Frame.parseAt? r.buffer r.offset maxSize with
+  | error e => rfl
+  | ok o => cases o <;> rfl
+
+/-- `next?` parses the unread bytes: what it returns, and what it leaves
+    unread, depend on nothing else. -/
+theorem next?_eq (r : FrameReader) (maxSize : Nat) :
+    (r.next? maxSize).map (Option.map fun (f, r') => (f, r'.unread)) =
+      (Frame.parseAt? r.unread 0 maxSize).map
+        (Option.map fun (f, n) => (f, r.unread.extract n r.unread.size)) := by
+  rw [next?_def]
+  unfold unread
+  rw [Frame.parseAt?_extract r.buffer r.offset maxSize]
+  cases Frame.parseAt? (r.buffer.extract r.offset r.buffer.size) 0 maxSize with
+  | error e => rfl
+  | ok o =>
+    cases o with
+    | none => rfl
+    | some p =>
+      obtain ⟨f, n⟩ := p
+      simp only [Except.map, Option.map_some, ByteArray.extract_extract, ByteArray.size_extract,
+        Nat.min_self, Except.ok.injEq, Option.some.injEq, Prod.mk.injEq, true_and]
+      congr 1
+      omega
+
+private theorem next?_parseAt? {r r' : FrameReader} {maxSize : Nat} {f : Frame}
+    (h : r.next? maxSize = .ok (some (f, r'))) :
+    ∃ n, Frame.parseAt? r.unread 0 maxSize = .ok (some (f, n)) ∧
+      r'.unread = r.unread.extract n r.unread.size := by
+  have h₁ := next?_eq r maxSize
+  rw [h] at h₁
+  cases hp : Frame.parseAt? r.unread 0 maxSize with
+  | error e => simp [hp, Except.map] at h₁
+  | ok o =>
+    cases o with
+    | none => simp [hp, Except.map] at h₁
+    | some p =>
+      obtain ⟨f', n⟩ := p
+      simp only [hp, Except.map, Option.map_some, Except.ok.injEq, Option.some.injEq,
+        Prod.mk.injEq] at h₁
+      obtain ⟨rfl, hu⟩ := h₁
+      exact ⟨n, rfl, hu⟩
+
+private theorem next?_error_iff {r : FrameReader} {maxSize : Nat} {code : UInt32} :
+    r.next? maxSize = .error code ↔ Frame.parseAt? r.unread 0 maxSize = .error code := by
+  have h₁ := next?_eq r maxSize
+  constructor
+  · intro h
+    rw [h] at h₁
+    cases hp : Frame.parseAt? r.unread 0 maxSize with
+    | error e => simp_all [Except.map]
+    | ok o => simp [hp, Except.map] at h₁
+  · intro h
+    rw [h] at h₁
+    cases hn : r.next? maxSize with
+    | error e => simp_all [Except.map]
+    | ok o => simp [hn, Except.map] at h₁
+
+/-- A frame that has arrived is returned whatever arrives after it, and those
+    bytes are left unread after it. -/
+theorem next?_feed {r r' : FrameReader} {maxSize : Nat} {f : Frame}
+    (h : r.next? maxSize = .ok (some (f, r'))) (bytes : ByteArray) :
+    ∃ r'', (r.feed bytes).next? maxSize = .ok (some (f, r'')) ∧
+      r''.unread = r'.unread ++ bytes := by
+  obtain ⟨n, hp, hu⟩ := next?_parseAt? h
+  have hn := Frame.le_size_of_parseAt? hp
+  have h₁ := next?_eq (r.feed bytes) maxSize
+  rw [unread_feed, Frame.parseAt?_append bytes (by simp [hp]), hp] at h₁
+  cases h₂ : (r.feed bytes).next? maxSize with
+  | error e => simp [h₂, Except.map] at h₁
+  | ok o =>
+    cases o with
+    | none => simp [h₂, Except.map] at h₁
+    | some p =>
+      obtain ⟨f', r''⟩ := p
+      simp only [h₂, Except.map, Option.map_some, Except.ok.injEq, Option.some.injEq,
+        Prod.mk.injEq] at h₁
+      obtain ⟨rfl, hu'⟩ := h₁
+      refine ⟨r'', rfl, ?_⟩
+      rw [hu', hu, ByteArray.extract_append, ByteArray.size_append,
+        show n - r.unread.size = 0 by omega,
+        show r.unread.size + bytes.size - r.unread.size = bytes.size by omega,
+        ByteArray.extract_zero_size]
+      congr 1
+      apply ByteArray.ext
+      rw [ByteArray.data_extract, ByteArray.data_extract, Array.extract_eq_extract_right]
+      simp only [ByteArray.size_data]
+      omega
+
+/-- An oversized frame is refused whatever arrives after it. -/
+theorem next?_feed_error {r : FrameReader} {maxSize : Nat} {code : UInt32}
+    (h : r.next? maxSize = .error code) (bytes : ByteArray) :
+    (r.feed bytes).next? maxSize = .error code := by
+  rw [next?_error_iff] at h ⊢
+  rw [unread_feed, Frame.parseAt?_append bytes (by simp [h]), h]
+
+/-- A returned frame leaves at least nine fewer bytes unread. -/
+theorem size_unread_next? {r r' : FrameReader} {maxSize : Nat} {f : Frame}
+    (h : r.next? maxSize = .ok (some (f, r'))) : r'.unread.size + 9 ≤ r.unread.size := by
+  obtain ⟨n, hp, hu⟩ := next?_parseAt? h
+  have := Frame.le_size_of_parseAt? hp
+  rw [hu, ByteArray.size_extract]
+  omega
+
+/-- Every frame that has fully arrived, in order, and then the reader left,
+    or the error refusing an oversized frame. -/
+def drain (r : FrameReader) (maxSize : Nat) : List Frame × Except UInt32 FrameReader :=
+  match h : r.next? maxSize with
+  | .ok (some (f, r')) =>
+    have := size_unread_next? h
+    (f :: (drain r' maxSize).1, (drain r' maxSize).2)
+  | .ok none => ([], .ok r)
+  | .error code => ([], .error code)
+termination_by r.unread.size
+
+theorem drain_of_next?_some {r r' : FrameReader} {maxSize : Nat} {f : Frame}
+    (h : r.next? maxSize = .ok (some (f, r'))) :
+    r.drain maxSize = (f :: (r'.drain maxSize).1, (r'.drain maxSize).2) := by
+  rw [drain]
+  split <;> simp_all
+
+theorem drain_of_next?_none {r : FrameReader} {maxSize : Nat} (h : r.next? maxSize = .ok none) :
+    r.drain maxSize = ([], .ok r) := by
+  rw [drain]
+  split <;> simp_all
+
+theorem drain_of_next?_error {r : FrameReader} {maxSize : Nat} {code : UInt32}
+    (h : r.next? maxSize = .error code) : r.drain maxSize = ([], .error code) := by
+  rw [drain]
+  split <;> simp_all
+
+/-- Draining depends only on the unread bytes. -/
+theorem drain_congr {r s : FrameReader} {maxSize : Nat} (h : r.unread = s.unread) :
+    (r.drain maxSize).1 = (s.drain maxSize).1 ∧
+      (r.drain maxSize).2.map unread = (s.drain maxSize).2.map unread := by
+  induction r using drain.induct (maxSize := maxSize) generalizing s with
+  | case1 r f r' hr _ ih =>
+    have h₁ := next?_eq s maxSize
+    rw [← h, ← next?_eq r maxSize, hr] at h₁
+    cases hs : s.next? maxSize with
+    | error e => simp [hs, Except.map] at h₁
+    | ok o =>
+      cases o with
+      | none => simp [hs, Except.map] at h₁
+      | some p =>
+        obtain ⟨f', s'⟩ := p
+        simp only [hs, Except.map, Option.map_some, Except.ok.injEq, Option.some.injEq,
+          Prod.mk.injEq] at h₁
+        obtain ⟨rfl, hu⟩ := h₁
+        rw [drain_of_next?_some hr, drain_of_next?_some hs]
+        have := ih hu.symm
+        simp [this.1, this.2]
+  | case2 r hr =>
+    have h₁ := next?_eq s maxSize
+    rw [← h, ← next?_eq r maxSize, hr] at h₁
+    cases hs : s.next? maxSize with
+    | error e => simp [hs, Except.map] at h₁
+    | ok o =>
+      cases o with
+      | none => simp [drain_of_next?_none hr, drain_of_next?_none hs, Except.map, h]
+      | some p => simp [hs, Except.map] at h₁
+  | case3 r code hr =>
+    have h₁ := next?_eq s maxSize
+    rw [← h, ← next?_eq r maxSize, hr] at h₁
+    cases hs : s.next? maxSize with
+    | error e =>
+      simp only [hs, Except.map, Except.error.injEq] at h₁
+      subst h₁
+      simp [drain_of_next?_error hr, drain_of_next?_error hs]
+    | ok o => simp [hs, Except.map] at h₁
+
+/-- Draining, then feeding more bytes and draining again, returns the same
+    frames, and leaves the same bytes unread or refuses the same frame, as
+    feeding the bytes first and draining once. So by induction, feeding a stream
+    in any number of pieces, draining after each, returns what feeding it whole
+    would. -/
+theorem drain_feed {r r' : FrameReader} {maxSize : Nat} (h : (r.drain maxSize).2 = .ok r')
+    (bytes : ByteArray) :
+    (r.drain maxSize).1 ++ ((r'.feed bytes).drain maxSize).1 = ((r.feed bytes).drain maxSize).1 ∧
+      ((r'.feed bytes).drain maxSize).2.map unread =
+        ((r.feed bytes).drain maxSize).2.map unread := by
+  induction r using drain.induct (maxSize := maxSize) with
+  | case1 r f r₁ hr _ ih =>
+    rw [drain_of_next?_some hr] at h ⊢
+    obtain ⟨t, ht, htu⟩ := next?_feed hr bytes
+    have hc := drain_congr (maxSize := maxSize) (r := r₁.feed bytes) (s := t)
+      (by rw [htu, unread_feed])
+    rw [drain_of_next?_some ht]
+    simp only [List.cons_append, List.cons.injEq, true_and]
+    have := ih h
+    exact ⟨this.1.trans hc.1, this.2.trans hc.2⟩
+  | case2 r hr =>
+    rw [drain_of_next?_none hr] at h ⊢
+    simp only [Except.ok.injEq] at h
+    subst h
+    simp
+  | case3 r code hr =>
+    rw [drain_of_next?_error hr] at h
+    simp at h
+
+/-- A stream whose draining refuses a frame refuses it, after the same frames,
+    whatever bytes arrive next. -/
+theorem drain_feed_error {r : FrameReader} {maxSize : Nat} {code : UInt32}
+    (h : (r.drain maxSize).2 = .error code) (bytes : ByteArray) :
+    (r.feed bytes).drain maxSize = ((r.drain maxSize).1, .error code) := by
+  induction r using drain.induct (maxSize := maxSize) with
+  | case1 r f r₁ hr _ ih =>
+    rw [drain_of_next?_some hr] at h ⊢
+    obtain ⟨t, ht, htu⟩ := next?_feed hr bytes
+    have hc := drain_congr (maxSize := maxSize) (r := r₁.feed bytes) (s := t)
+      (by rw [htu, unread_feed])
+    have := ih h
+    rw [this] at hc
+    rw [drain_of_next?_some ht]
+    obtain ⟨h₁, h₂⟩ := hc
+    cases ht' : (t.drain maxSize).2 with
+    | error e =>
+      rw [ht'] at h₂
+      simp only [Except.map, Except.error.injEq] at h₂
+      simp [← h₁, h₂]
+    | ok t' => simp [ht', Except.map] at h₂
+  | case2 r hr =>
+    rw [drain_of_next?_none hr] at h
+    simp at h
+  | case3 r code' hr =>
+    rw [drain_of_next?_error hr] at h
+    simp only [Except.error.injEq] at h
+    subst h
+    rw [drain_of_next?_error (next?_feed_error hr bytes), drain_of_next?_error hr]
 
 end FrameReader
 

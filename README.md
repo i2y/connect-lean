@@ -337,6 +337,16 @@ checks the axioms of each theorem listed here.
 - `Connect.Gzip.inflate_size_le`, `decompress_size_le`: decompression never
   produces more than the limit, however the input was made.
 
+**How the network splits the bytes does not matter:**
+
+- `Connect.EnvelopeReader.unread_feed`, `next?_eq`, `next?_feed`: feeding
+  appends to the bytes the reader holds, `next?` parses those bytes and nothing
+  else, and a message that has arrived is not changed by the bytes after it.
+- `Connect.EnvelopeReader.drain_feed`: so draining after each chunk returns the
+  same messages, and leaves the same bytes, as draining after all of them.
+- `Connect.Http2.FrameReader.drain_feed`, `drain_feed_error`: the same for
+  HTTP/2 frames, including the refusal of an oversized frame.
+
 ## Limitations
 
 - **Linux and macOS.** CI builds and tests on both, and runs the conformance

@@ -93,7 +93,28 @@ def envelopeTests : List Test := [
   ("announced length is visible before the payload", do
     let r := EnvelopeReader.empty.feed ((Envelope.encode { flags := 0, payload := ByteArray.mk (Array.replicate 1000 7) }).extract 0 5)
     expectEq r.nextLength? (some 1000)
-    expect r.next?.isNone)
+    expect r.next?.isNone),
+  ("draining after each chunk returns what draining once does", do
+    let es : Array Envelope := (Array.range 20).map fun i =>
+      { flags := (i % 3).toUInt8, payload := ByteArray.mk (Array.replicate (i * 7 % 23) i.toUInt8) }
+    let wire := es.foldl (fun acc e => acc ++ e.encode) ByteArray.empty ++ bytes "\x00\x00"
+    let (whole, rest) := (EnvelopeReader.empty.feed wire).drain
+    expectEq whole.length 20
+    expectEq rest.unread (bytes "\x00\x00")
+    for step in [1, 2, 3, 5, 8, 13, 100] do
+      let mut r := EnvelopeReader.empty
+      let mut got : List Envelope := []
+      let mut i := 0
+      while i < wire.size do
+        let (more, r') := (r.feed (wire.extract i (i + step))).drain
+        got := got ++ more
+        r := r'
+        i := i + step
+      expectEq got.length whole.length s!"chunks of {step}"
+      for (a, b) in got.zip whole do
+        expectEq a.flags b.flags
+        expectEq a.payload b.payload
+      expectEq r.unread rest.unread s!"chunks of {step}")
 ]
 
 def errorTests : List Test := [
