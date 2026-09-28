@@ -61,7 +61,7 @@ jobs:
         with:
           version: ${{ env.PROTOC_VERSION }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - uses: bufbuild/buf-action@fd21066df7214747548607aaa45548ba2b9bc1ff # v1
+      - uses: bufbuild/buf-action@85aebf73123b5c15fd5528aaecbf9129cddf7fa7 # v1
         with:
           setup_only: true
           version: ${{ env.BUF_VERSION }}

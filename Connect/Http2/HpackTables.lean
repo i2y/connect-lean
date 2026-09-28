@@ -5,9 +5,9 @@ public section
 /-!
 # HPACK tables
 
-The static table (RFC 7541 Appendix A) and the Huffman code (Appendix B).
-Generated from golang.org/x/net/http2/hpack; do not edit by hand. The
-decoding tables at the end are derived from the Huffman code.
+The static table (RFC 7541 Appendix A) and the Huffman code (Appendix B),
+generated from the copy of them in golang.org/x/net/http2/hpack; do not edit
+by hand. The decoding tables at the end are derived from the Huffman code.
 -/
 
 namespace Connect.Http2.Hpack

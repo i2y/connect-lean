@@ -5,7 +5,8 @@
 
 [Connect](https://connectrpc.com) for Lean 4: serve and call APIs defined in
 Protocol Buffers, over the Connect protocol, gRPC and gRPC-Web, with binary or
-JSON messages.
+JSON messages. connect-lean is a community implementation, outside the
+[connectrpc](https://github.com/connectrpc) organization.
 
 ```lean
 def greeter : GreetService where
