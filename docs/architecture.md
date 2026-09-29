@@ -132,7 +132,14 @@ as `unknown`.
 
 ## Proofs
 
-The pure codecs carry theorems (see the README). They are stated about the
-functions the runtime itself calls, `Envelope.parseAt?` and
-`Http2.Frame.parseAt?`; the buffering around them in `EnvelopeReader` and
-`FrameReader` is tested (including byte-at-a-time delivery), not proved.
+The pure codecs carry theorems ([proofs.md](proofs.md) lists them). They are
+stated about the functions the runtime itself calls, such as
+`Envelope.parseAt?`, `Http2.Hpack.huffmanDecode` and `EnvelopeReader.next?`,
+not about models of them.
+
+Loops the proofs go through are tail-recursive functions rather than `while`
+or `for`, which proofs cannot see into. Where such a loop does arithmetic on
+bits, it keeps machine words (a `UInt64` accumulator in the Huffman encoder,
+`UInt32` in the base64 decoder), and the proofs reach them through their `Nat`
+values: `Nat` shifts and powers compile to calls into the runtime, and made
+those loops several times slower.

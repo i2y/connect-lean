@@ -55,11 +55,11 @@ def interceptedClient : IO Connect.Client := do
   return connection
 
 def serveWithOptions (router : Router) : IO Unit :=
-  Connect.serve router {
-    readMaxBytes := 1024 * 1024                -- largest request message
-    compressions := #[Compression.gzip]        -- besides identity
-    interceptors := #[auth, timing, logRequests] -- first one outermost
-  }
+  Connect.serve router
+    { readMaxBytes := 1024 * 1024                    -- largest request message
+      compressions := #[Compression.gzip]            -- besides identity
+      interceptors := #[auth, timing, logRequests] } -- first one outermost
+    { host := "0.0.0.0", port := 8080 }
 
 def clientMain : IO Unit := do
   let connection ← Connect.Client.create { baseUrl := "http://localhost:8080" }

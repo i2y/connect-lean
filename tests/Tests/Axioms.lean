@@ -1,6 +1,6 @@
 import Connect
 
-/-! The theorems README.md lists rest on Lean's standard axioms at most: no
+/-! The theorems docs/proofs.md lists rest on Lean's standard axioms at most: no
 `sorry`, no `native_decide`. -/
 
 /-! Round trips. -/
