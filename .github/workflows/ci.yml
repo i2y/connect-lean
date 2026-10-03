@@ -33,7 +33,7 @@ jobs:
       # rests on other axioms: `lcProof` comes from `unsafeCast` in the two
       # `unsafe` definitions that implement `MessageInterceptor.box`, which
       # proofs cannot reach.
-      - uses: leanprover/lean-action@50fcf42d2e460296f1a34b402e990d1b24f8b596 # v1.6.0
+      - uses: leanprover/lean-action@f061402b660e0c34644504b324e830f2991d4865 # v1.6.1
         with:
           axiom-audit: ${{ matrix.os == 'ubuntu-24.04' }}
           axiom-audit-allow: propext,Classical.choice,Quot.sound,lcProof
@@ -48,7 +48,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: leanprover/lean-action@50fcf42d2e460296f1a34b402e990d1b24f8b596 # v1.6.0
+      - uses: leanprover/lean-action@f061402b660e0c34644504b324e830f2991d4865 # v1.6.1
         with:
           build-args: conformance-server conformance-client
           test: false
